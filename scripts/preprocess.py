@@ -92,7 +92,7 @@ def preprocess_instacart(
     basket_df = merged.select(
         pl.col("user_id").cast(pl.Utf8),
         (pl.col("order_number") - 1).alias("order_idx"),  # 0-indexed
-        pl.col("product_id").cast(pl.Utf8),
+        pl.col("product_id").cast(pl.Utf8).alias("item_id"),
     )
 
     remapped, user2id, item2id = _preprocess_basket_df(
@@ -116,33 +116,67 @@ def preprocess_dunnhumby(
     min_item_freq: int = 5,
 ) -> None:
     """Preprocess Dunnhumby Complete Journey dataset."""
-    transactions = pl.read_csv(raw_dir / "transaction_data.csv.gz")
+    # Sample files are split by month (transactions_YYYYMM.csv)
+    transaction_files = sorted(raw_dir.glob("transactions_*.csv"))
+    if not transaction_files:
+        raise RuntimeError(f"No transaction files found in {raw_dir}. Expected transactions_*.csv")
 
-    # Columns: household_key, BASKET_ID, DAY, PRODUCT_ID, …
-    # BASKET_ID is unique per shopping trip; sort by DAY within each household
-    # to establish temporal order, then assign sequential order_idx.
+    # Load and concatenate all transaction files (select only required columns)
+    required = ["CUST_CODE", "BASKET_ID", "SHOP_DATE", "PROD_CODE"]
+    frames: list[pl.DataFrame] = []
+    for f in transaction_files:
+        df = pl.read_csv(f)
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            raise RuntimeError(
+                f"{f.name} missing columns: {missing}. Verify the extracted Dunnhumby sample."
+            )
+        frames.append(
+            df.select(required).with_columns(
+                pl.col("CUST_CODE").cast(pl.Utf8),
+                pl.col("PROD_CODE").cast(pl.Utf8),
+                pl.col("BASKET_ID").cast(pl.Utf8),
+                pl.col("SHOP_DATE").cast(pl.Int64),
+            )
+        )
+    transactions = pl.concat(frames, how="vertical")
+
+    if "CUST_CODE" not in transactions.columns:
+        raise RuntimeError(
+            "Dunnhumby sample files missing CUST_CODE. Verify the correct dataset was extracted."
+        )
+    if "PROD_CODE" not in transactions.columns:
+        raise RuntimeError(
+            "Dunnhumby sample files missing PROD_CODE. Verify the correct dataset was extracted."
+        )
+    if "BASKET_ID" not in transactions.columns or "SHOP_DATE" not in transactions.columns:
+        raise RuntimeError(
+            "Dunnhumby sample files missing BASKET_ID/SHOP_DATE. Verify the correct dataset was extracted."
+        )
+
+    # Columns (sample dataset): SHOP_DATE, CUST_CODE, BASKET_ID, PROD_CODE
+    # SHOP_DATE is YYYYMMDD; BASKET_ID is unique per shopping trip.
+    # Build a sequential order_idx per customer based on SHOP_DATE and BASKET_ID.
     basket_days = (
-        transactions.select("household_key", "BASKET_ID", "DAY")
+        transactions.select("CUST_CODE", "BASKET_ID", "SHOP_DATE")
         .unique()
-        .sort(["household_key", "DAY", "BASKET_ID"])
+        .sort(["CUST_CODE", "SHOP_DATE", "BASKET_ID"])
     )
 
-    # Assign sequential order index per household
     basket_days = basket_days.with_columns(
-        pl.col("BASKET_ID").rank(method="ordinal").over("household_key").alias("order_idx") - 1,
+        pl.col("BASKET_ID").rank(method="ordinal").over("CUST_CODE").alias("order_idx") - 1,
     )
 
-    # Join back to get item-level rows with order_idx
     merged = transactions.join(
-        basket_days.select("household_key", "BASKET_ID", "order_idx"),
-        on=["household_key", "BASKET_ID"],
+        basket_days.select("CUST_CODE", "BASKET_ID", "order_idx"),
+        on=["CUST_CODE", "BASKET_ID"],
         how="inner",
     )
 
     basket_df = merged.select(
-        pl.col("household_key").cast(pl.Utf8).alias("user_id"),
+        pl.col("CUST_CODE").cast(pl.Utf8).alias("user_id"),
         pl.col("order_idx"),
-        pl.col("PRODUCT_ID").cast(pl.Utf8).alias("item_id"),
+        pl.col("PROD_CODE").cast(pl.Utf8).alias("item_id"),
     )
 
     remapped, user2id, item2id = _preprocess_basket_df(
@@ -166,7 +200,8 @@ def preprocess_tafeng(
     min_item_freq: int = 5,
 ) -> None:
     """Preprocess TaFeng grocery dataset."""
-    df = pl.read_csv(raw_dir / "ta_feng_all_months.csv")
+    # The merged Kaggle file is ta_feng_all_months_merged.csv
+    df = pl.read_csv(raw_dir / "ta_feng_all_months_merged.csv")
 
     # Columns: TRANSACTION_DT, CUSTOMER_ID, PRODUCT_ID, …
     # Parse dates and sort to establish temporal order

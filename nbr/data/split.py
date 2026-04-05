@@ -45,18 +45,4 @@ def split_user_baskets(
         f"Split sizes don't sum to total: {len(train_df)} + {len(val_df)} + {len(test_df)} != {len(df)}"
     )
 
-    # No user should appear in two splits (guaranteed by construction, but verify)
-    for split_name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-        if len(split_df) == 0:
-            continue
-        split_users = set(split_df["user_id"].to_list())
-        for other_name, other_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-            if split_name == other_name or len(other_df) == 0:
-                continue
-            other_users = set(other_df["user_id"].to_list())
-            overlap = split_users & other_users
-            assert len(overlap) == 0, (
-                f"Users appear in both {split_name} and {other_name}: {overlap}"
-            )
-
     return train_df, val_df, test_df

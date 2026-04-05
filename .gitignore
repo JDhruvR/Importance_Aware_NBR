@@ -20,14 +20,6 @@ uv.lock
 # ============================================
 data/raw/
 data/processed/
-*.parquet
-*.csv
-*.csv.gz
-*.jsonl
-*.npy
-*.npz
-*.bin
-*.kv
 
 # ============================================
 # IDE / Editor
@@ -49,7 +41,6 @@ checkpoints/
 *.ckpt
 *.log
 wandb/
-*.json  # results files (keep small configs, ignore large outputs)
 
 # ============================================
 # Temporary / scratch files

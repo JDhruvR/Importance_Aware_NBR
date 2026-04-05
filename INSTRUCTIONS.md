@@ -19,6 +19,37 @@ independently evaluable so ablations come for free.
 
 ---
 
+## Dataset Downloads (Human Instructions)
+
+These are manual steps for humans. Do not automate authentication.
+
+### Instacart 2017
+Source: https://www.kaggle.com/datasets/psparks/instacart-market-basket-analysis
+
+1. Create Kaggle API token from your account settings.
+2. Download the dataset and unzip into: `data/raw/instacart/`
+3. Required files:
+   - `orders.csv`
+   - `order_products__prior.csv`
+   - `order_products__train.csv`
+
+### TaFeng
+Source: https://www.kaggle.com/datasets/chiranjivdas09/ta-feng-grocery-dataset
+
+1. Download the dataset and unzip into: `data/raw/tafeng/`
+2. Expected file:
+   - `ta_feng_all_months_merged.csv`
+
+### Dunnhumby (sample 50k customers)
+Source: dunnhumby Complete Journey (sample ZIP)
+
+1. Download the sample ZIP and extract into: `data/raw/dunnhumby/`
+2. Expected files:
+   - `transactions_*.csv` (multiple monthly files)
+   - `time.csv`
+
+---
+
 ## Living Documents — Maintain These Every Session
 
 ### `changelog.md`

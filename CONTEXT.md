@@ -1,7 +1,7 @@
 # Context
 
 ## Current State
-Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done.
+Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done. Data preprocessing was run on all three datasets with the currently available files.
 
 ## Completed Tasks
 **Phase 0 — Repo Bootstrap:**
@@ -23,8 +23,11 @@ Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), a
 - T2.3: nbr/models/gpt.py — RoPEAttention + CausalBasketGPT (causality verified)
 - T2.4: nbr/models/vanilla.py — VanillaNBR (embeddings -> encoder mean-pool -> GPT -> dot-product logits)
 
+**Phase 2 — Baselines (Frequency):**
+- T2.5: started — nbr/baselines/frequency.py and scripts/evaluate_baselines.py created (evaluation needs runtime tuning)
+
 ## Next Task
-T2.5 — Frequency baselines: Create nbr/baselines/frequency.py with GlobalTopFreq, PersonalTopFreq, GPTopFreq.
+T2.5 — Frequency baselines: finish evaluation runtime on full datasets and verify baseline metrics.
 
 ## Decisions Made
 - Paper: "Not All Items Are Created Equal: Importance-Aware Next Basket Recommendation"
@@ -34,12 +37,18 @@ T2.5 — Frequency baselines: Create nbr/baselines/frequency.py with GlobalTopFr
 - All preprocessing logic in single scripts/preprocess.py with shared helper
 - BasketSequenceDataset: one sample per user, target = last basket, input = up to max_seq_len historical baskets
 - ItemEmbedding.weight accessed via self.item_embedding.embedding.weight
+- TaFeng file name is `ta_feng_all_months_merged.csv`
+- Dunnhumby sample uses `transactions_*.csv` with columns CUST_CODE, BASKET_ID, SHOP_DATE, PROD_CODE
+- Baseline evaluation uses basket-level histories from train split; test targets are last basket per user
 
 ## Broken / Incomplete
-- No raw data downloaded yet — preprocessing and dataset classes cannot be end-to-end tested
-- Need to create nbr/baselines/ directory and implement frequency baselines
+- Need to run baseline evaluation on full datasets (subset runs done)
+- Need to run GPTopFreq alpha sweeps
 - Need to create experiments/ directory and training loops
 - Need to create tests/ directory and write unit tests
 
 ## Best Val Metrics
 None yet.
+
+## Baseline Metrics (subset runs)
+- Logged 2k-user subset results in results/baseline_eval.md

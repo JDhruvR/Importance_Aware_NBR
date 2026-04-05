@@ -45,3 +45,22 @@
 - Created: nbr/models/gpt.py — RoPEAttention + CausalBasketGPT with causality verified
 - Created: nbr/models/vanilla.py — VanillaNBR combining all components
 - Done: all shape tests pass, causality verified, gradients flow correctly
+
+## 2026-04-06 — Dataset preprocessing aligned to actual files
+- Changed: scripts/preprocess.py to handle TaFeng merged file name and Dunnhumby sample files
+- Changed: scripts/preprocess.py to select and cast required Dunnhumby columns consistently
+- Changed: .gitignore to only ignore data directories (not all csv/json/parquet globally)
+- Changed: INSTRUCTIONS.md with human download steps for all three datasets
+
+## 2026-04-06 — Frequency baselines scaffolding
+- Added: nbr/baselines/frequency.py with GlobalTopFreq, PersonalTopFreq, GPTopFreq
+- Added: scripts/evaluate_baselines.py for Recall/Repeat/Explore metrics
+- Changed: nbr/data/split.py to remove invalid user-overlap assertion
+
+## 2026-04-06 — Baseline evaluation runtime
+- Changed: scripts/evaluate_baselines.py to use aggregated counts (faster on large datasets)
+- Added: --max-users flag for subset evaluation to keep runtime manageable
+- Done: baseline metrics computed on 2k-user subsets for Instacart, TaFeng, Dunnhumby
+
+## 2026-04-06 — Baseline results tracking
+- Added: results/baseline_eval.md with commands and subset metrics for all datasets (full runs pending)
