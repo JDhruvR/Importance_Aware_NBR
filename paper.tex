@@ -1,0 +1,662 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+\title{Not All Items Are Created Equal\\
+\vspace{0.5cm}
+\large Importance-Aware Next Basket Recommendation}
+
+\author{
+\IEEEauthorblockN{Dhruv Ramesh Joshi}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+\and
+\IEEEauthorblockN{R Ricky Roger}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+\and
+\IEEEauthorblockN{Siddharth Prashant Kini}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+\and
+\IEEEauthorblockN{Subhash Hari}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+}
+
+\maketitle
+
+%-----------------------------------------------------------------------
+\begin{abstract}
+Next basket recommendation predicts the full set of items a user will
+purchase next given their history. Existing methods encode each basket
+as a flat vector and treat every item as an equally important signal of
+user intent. We argue this is structurally wrong: every basket is
+organized around a small number of intent-defining items, with the
+remainder serving as peripheral fill. We propose an architecture that
+makes this distinction explicit at every stage. A BERT-style intra-basket
+encoder produces per-item contextualized representations, from which a
+learned importance head derives per-item importance weights initialized
+from a geometric leave-one-out attribution score corrected for
+population frequency. An elementwise-gated dual-stream representation
+blends a full-basket summary with an importance-weighted intent centroid.
+A causal GPT with rotary position embeddings models the temporal sequence
+of basket representations and produces a single predicted next-basket
+vector. Decoding proceeds in two conditioned stages: core items are
+predicted first via a low-rank orthogonal intent projection, and
+peripheral items are then predicted from a fill head whose query is
+explicitly conditioned on the discovered core, bridged by a
+differentiable soft intent context during training. This prevents intent
+items from crowding peripheral slots while ensuring fill predictions are
+coherent with the predicted intent.
+\end{abstract}
+
+\begin{IEEEkeywords}
+next basket recommendation, purchase intent, importance scoring,
+transformer, hierarchical decoding, sequential recommendation
+\end{IEEEkeywords}
+
+
+%-----------------------------------------------------------------------
+\section{Introduction}
+Next Basket Recommendation (NBR) is a well-established problem in the recommender systems literature, with sustained research interest over the past decade. Given a sequence of historical baskets — sets of items purchased or consumed together — the goal of an NBR system is to predict the set of items a user will select in their next interaction. This setting is prominent in real-world applications such as e-commerce and grocery shopping, where users routinely purchase multiple items in a single session.
+NBR is fundamentally distinct from sequential item recommendation and session-based recommendation: unlike those settings, NBR must deal with an unordered set of multiple items as both input and output. This structural difference means that models designed for item-level recommendation are generally not directly applicable, and a dedicated body of literature has emerged to address the NBR task specifically.
+
+A user who buys chicken, basmati rice, saffron, yogurt, and cooking oil
+in one trip is not selecting five independent items. They are executing
+a meal plan. The basket is the physical realization of a latent intent.
+Remove the chicken and the basket loses its organizing purpose. Remove
+the cooking oil and the basket remains a coherent meal.
+
+This asymmetry is invisible to every existing next basket recommendation
+(NBR) system. Standard methods encode each basket as a mean or max pool
+over item embeddings and treat all items as equal contributors to the
+basket's representation. The model receives identical gradient signal
+whether it mispredicts the meal anchor or an incidental staple. At
+inference, items are decoded by scoring all catalog items against a
+single flat predicted vector and taking the top-$K$, with no mechanism
+to prevent predicting four redundant beverages or to ensure that fill
+items are coherent with whatever main intent was predicted.
+
+We propose an architecture grounded in the observation that a basket is
+not a flat bag but a hierarchical satisfaction of a purchase intent:
+a few load-bearing items define why the basket exists, and a larger
+set of fill items complete it. Our system makes this structure explicit
+in the encoder, the basket representation, and the decoder.
+
+Concretely, we contribute:
+\begin{itemize}
+\item A \textbf{geometric importance score} per item, measuring how much
+  the basket representation shifts when that item is removed, corrected
+  for population frequency to separate structural importance from rarity.
+\item A \textbf{parallel importance head} on top of the BERT encoder
+  that produces per-item importance weights, initialized from the
+  geometric score and refined during training.
+\item A \textbf{dual-stream gated basket representation} that blends the
+  full-basket CLS summary with an importance-weighted intent centroid.
+\item A \textbf{conditioned two-stage decoder}: core items are predicted
+  from a low-rank intent projection of the GPT output; fill items are
+  then predicted from a fill head whose query is conditioned on the
+  discovered core via a differentiable soft bridge, preventing intent
+  items from crowding fill slots while keeping the two stages jointly
+  trainable.
+\end{itemize}
+
+
+%-----------------------------------------------------------------------
+\section{Literature Survey}
+\label{sec:related}
+
+\subsection{Frequency and Neighbor Methods}
+
+The simplest NBR baselines rely on item frequency.
+P-TopFreq and G-TopFreq recommend the most personally or globally
+frequent items respectively. Li et al.\cite{li2023next} propose
+GP-TopFreq as a strong hybrid baseline and show that deep learning
+methods frequently fail to surpass it once repeat and explore recall are
+evaluated separately. TIFUKNN~\cite{hu2020modeling} and
+UP-CF@r~\cite{faggioli2020recency} add temporal frequency dynamics and
+recency weighting to collaborative filtering, achieving competitive
+performance primarily through accurate repeat prediction.
+
+\subsection{RNN and Graph Methods}
+
+DREAM~\cite{yu2016dynamic} introduced RNN-based temporal modeling of
+basket sequences, representing each basket as a mean pool over item
+embeddings. HRM~\cite{wang2015learning} formalized the two-level
+item-within-basket and basket-within-sequence hierarchy, the earliest
+architectural precursor to our design. DNNTSP~\cite{yu2020predicting}
+built a dynamic co-occurrence graph over items, runs graph convolution
+for intra-basket item relationships, and uses masked self-attention over
+the basket sequence. Despite its sophistication it assigns uniform
+importance to all graph nodes. Sets2Sets~\cite{hu2019sets2sets} encodes
+frequency as an explicit input feature, making it repeat-biased by
+construction. Beacon~\cite{le2019correlation} captures pairwise item
+correlations for coherent predictions but cannot represent directed
+importance structure.
+
+\subsection{Contrastive Methods}
+
+CLEA~\cite{qin2021world} is the closest prior work to our importance
+idea. It learns a binary relevance mask via Gumbel-Softmax to separate
+relevant from irrelevant basket items and trains with a contrastive
+objective. The mask is binary and learned from the prediction loss with
+no geometric grounding. Our importance score is a continuous geometric
+measurement computed independently of any task objective.
+CL4NBR~\cite{zhu2025contrastive} adds contrastive augmentation over basket
+sequences with uniform item treatment.
+
+\subsection{Transformer Methods}
+
+SASRec~\cite{kang2018self} demonstrated that causal self-attention
+substantially outperforms RNNs for sequential recommendation.
+BERT4Rec~\cite{sun2019bert4rec} applied bidirectional masked attention
+with a Cloze objective to user histories and showed that bidirectional
+context produces richer item representations. Our Layer 1 and Layer 2
+encoders are directly inspired by these two papers respectively.
+NEST is the closest architectural ancestor:
+a set-within-encounter bidirectional encoder with no positional
+encoding, followed by a causal sequence encoder with rotary position
+embeddings. We extend this topology with importance scoring,
+dual-stream fusion, and conditioned two-stage decoding.
+
+\subsection{The Repeat-Explore Problem}
+
+ReCANet~\cite{ariannezhad2022recanet} empirically established that
+over 54\% of NBR recall on grocery datasets comes from repeat items
+constituting less than 1\% of the catalog. Li et al.~\cite{li2023next}
+provided the definitive evaluation, showing no published NBR method
+properly balances repeat and explore prediction. They introduce separate
+Repeat Recall@$K$ and Explore Recall@$K$ metrics and GP-TopFreq as the
+baseline every method must beat. Our IDF-corrected importance score
+directly addresses this: high-frequency items receive a population
+penalty, preventing the model from treating habitual repeats as
+intent-defining.
+
+% \subsection{Attention as Importance}
+
+% Jain and Wallace~\cite{jain2019attention} showed that learned attention
+% weights are frequently uncorrelated with gradient-based importance
+% measures. We do not use CLS attention weights as importance proxies.
+% Instead, our geometric leave-one-out score measures the actual shift in
+% the CLS output when an item is removed, grounding importance in
+% the model's output behavior.
+
+
+%-----------------------------------------------------------------------
+\section{Motivation}
+\label{sec:motivation}
+
+\subsection{Baskets Are Organized Around Intent}
+
+Every basket has a reason it exists. The items in a basket are not
+independent purchases but a joint realization of an underlying intent:
+make biryani, restock household staples, grab ingredients for a quick
+weeknight meal. The intent is the ground truth. The basket is a noisy
+observation of it, shaped by availability, habit, and opportunity.
+
+This reframing has a concrete consequence. The right prediction target
+is the intent underlying the next basket, from which the basket follows.
+A system that predicts the basket directly, treating it as ground truth,
+is predicting the noise alongside the signal with no mechanism to
+distinguish them.
+
+\subsection{Items Have Heterogeneous Importance}
+
+Items in a basket exist on a spectrum of intent-bearing importance.
+Some items define why the basket exists---removing them collapses its
+purpose. Others are expected given the intent but not unique to it.
+Others are peripheral and could be replaced freely without changing the
+basket's meaning. A model that assigns equal gradient signal to all
+three types will learn the signal and the noise simultaneously.
+
+\subsection{Flat Decoding Fails in Two Ways}
+
+Predicting the next basket from a single flat vector fails
+structurally. First, if intent and fill scores are combined into a
+single ranking, fill items may score weakly and intent items fill all
+top-$K$ slots---the predicted basket contains only anchors and no
+complements. Second, there is no notion of slot saturation: once a
+beverage intent is satisfied, additional beverages should score low,
+but a flat ranking has no mechanism for this.
+
+The correct structure is sequential: predict intent items first, then
+predict fill items conditioned on what the intent items reveal about the
+basket. The fill prediction must know what was predicted as intent
+before it runs.
+
+\subsection{Frequency and Importance Are Not the Same}
+
+Item frequency is not a reliable proxy for intent-bearing importance.
+High-frequency items are not always peripheral: chicken is purchased
+frequently but is genuinely load-bearing in every basket where it
+appears as a main protein. Low-frequency items are not always central:
+a rare imported product may be rare simply due to limited availability.
+A principled importance score must capture structural contribution
+independently of frequency, which motivates the IDF correction in our
+geometric score.
+
+
+%-----------------------------------------------------------------------
+\section{Core Idea}
+\label{sec:idea}
+
+The central proposal has four parts.
+
+\textbf{Geometric importance.} After a warmup phase, we measure each
+item's structural contribution to the basket representation by computing
+the Euclidean shift in the CLS output when that item is removed. This
+leave-one-out displacement, averaged across all basket appearances and
+corrected for population frequency via an IDF term, gives a stable
+global importance score $\alpha_i^{IDF}$ per item.
+
+\textbf{Importance head.} A lightweight MLP attached to the BERT
+encoder produces per-item importance weights $\alpha_i$ from the
+contextualized item representations $h_i$. It is initialized to
+reproduce $\alpha_i^{IDF}$ and then trained freely, allowing it to
+learn basket-specific context that the global score cannot capture.
+
+\textbf{Dual-stream basket representation.} Two representations are
+computed from each basket---a full-basket CLS summary and an
+importance-weighted centroid over item representations---and fused via
+a learned elementwise gate. The gate adapts as the importance head
+matures: early in training it relies on the CLS summary; as $\alpha$
+stabilizes it shifts toward the importance-filtered centroid.
+
+\textbf{Conditioned two-stage decoding.} The GPT outputs a single
+predicted next-basket vector. A learned low-rank orthogonal projection
+extracts an intent component from this vector. Core items are predicted
+from the intent component. The fill head's query is then conditioned on
+the soft weighted average of the intent scores over item embeddings---a
+differentiable bridge that carries the intent signal into fill
+prediction without requiring a hard decoding step at training time.
+
+
+%-----------------------------------------------------------------------
+\section{Methodology}
+\label{sec:method}
+
+\subsection{Item Embedding Initialization}
+
+We initialize the shared item embedding matrix
+$E \in \mathbb{R}^{|V| \times d}$ via skip-gram word2vec on the basket
+corpus, treating each basket as a sentence and each item as a token.
+Co-occurring items are initialized nearby in $\mathbb{R}^d$. $E$ is
+fully trainable throughout all phases.
+
+\subsection{Intra-Basket Encoder with Importance Head}
+
+Each basket $B_t = \{i_1, \ldots, i_K\}$ is encoded by a BERT-style
+transformer. A learned CLS token is prepended and the sequence is
+embedded:
+\begin{equation}
+X = [e_{\text{CLS}},\ E[i_1],\ \ldots,\ E[i_K]] \in \mathbb{R}^{(K+1) \times d}
+\end{equation}
+
+We apply $L_1$ layers of full bidirectional self-attention with no
+positional encoding and no causal mask.
+% \begin{align}
+% A &= \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d}}\right),\quad
+% X \leftarrow \operatorname{LN}(X + AV),\quad
+% X \leftarrow \operatorname{LN}(X + \operatorname{FFN}(X))
+% \end{align}
+
+No positional encoding is used because baskets are unordered sets.
+No causal mask is used because every item should attend to every other
+item; intra-basket structure is fully bidirectional. The output is
+$[h_{\text{CLS}}, h_1, \ldots, h_K]$.
+
+A parallel importance head, a two-layer MLP with sigmoid output,
+maps each item's contextualized representation to an importance weight:
+\begin{equation}
+\alpha_i = \sigma\!\left(W_2\, \operatorname{GELU}(W_1 h_i + b_1) + b_2\right) \in [0,1]
+\end{equation}
+
+The MLP operates on $h_i$ rather than on the raw embedding $E[i]$
+because $h_i$ encodes item $i$ in the context of the current basket:
+the same item may be more or less load-bearing depending on what else
+is present. A sigmoid (not softmax) output allows independent per-item
+scores rather than a zero-sum competition.
+
+An auxiliary masked language modeling loss trains the encoder to
+reconstruct randomly masked items from context, providing a direct
+training signal for the intra-basket encoder independent of the
+downstream temporal prediction task:
+\begin{equation}
+\mathcal{L}_{\text{MLM}} = \operatorname{CE}\!\left(E\, h_k^{\text{masked}},\ i_k^{\text{true}}\right)
+\end{equation}
+
+\subsection{Importance Score Initialization}
+
+After a warmup phase, we freeze the BERT encoder and compute a
+per-item global importance score. For each item $i$ in each training
+basket $B_t$ we measure the shift in the CLS output when $i$ is
+removed:
+\begin{equation}
+\delta(i, B_t) = \|h_{\text{CLS}}(B_t) - h_{\text{CLS}}(B_t \setminus \{i\})\|_2
+\end{equation}
+
+We normalize within each basket and aggregate across all appearances:
+\begin{align}
+\hat{\delta}(i, B_t) &= \frac{\delta(i, B_t)}{\sum_{j \in B_t} \delta(j, B_t)} \\
+\bar{\delta}_i        &= \frac{1}{|\{(u,t):i \in B_t\}|} \sum_{(u,t):\,i \in B_t} \hat{\delta}(i, B_t)
+\end{align}
+
+An IDF correction separates structural importance from population
+frequency:
+\begin{equation}
+\alpha_i^{IDF} = \bar{\delta}_i \cdot \log\frac{N}{df_i}
+\end{equation}
+
+where $N$ is the total number of training baskets and $df_i$ is the
+number of baskets containing item $i$. The score is normalized to $[0,1]$.
+% Items
+% with fewer than $n_{\min}$ appearances have their score imputed from
+% nearest neighbors in $E$.
+
+The importance head is then pre-trained to reproduce these scores
+via a mean-squared initialization loss before main training begins.
+
+\subsection{Dual-Stream Gated Basket Representation}
+
+Using the BERT outputs and the importance weights we construct two
+basket-level representations:
+\begin{align}
+b_t^{\text{full}} &= h_{\text{CLS}} \\
+b_t^{\text{core}} &= \frac{\sum_k \alpha_{i_k}\, h_k}{\sum_k \alpha_{i_k}}
+\end{align}
+
+$b_t^{\text{full}}$ encodes the full basket including peripheral items.
+$b_t^{\text{core}}$ is the importance-weighted centroid: it emphasizes
+the semantic neighborhood of load-bearing items and suppresses peripheral
+ones. These two are complementary---the former is richer but noisier,
+the latter is focused but incomplete.
+
+An elementwise gate fuses them:
+\begin{align}
+g_t &= \sigma\!\left(W_g [b_t^{\text{full}};\, b_t^{\text{core}}]\right) \in [0,1]^d \\
+b_t &= g_t \odot b_t^{\text{full}} + (1 - g_t) \odot b_t^{\text{core}}
+\end{align}
+
+The gate is elementwise rather than scalar because different dimensions
+of the embedding space may be differentially reliable between the two
+streams. Early in training, when $\alpha$ is poorly calibrated, the
+gate relies on $b_t^{\text{full}}$; as training progresses and
+importance weights stabilize, the gate shifts toward $b_t^{\text{core}}$.
+
+\subsection{Inter-Basket Causal GPT}
+
+The sequence $(b_1, b_2, \ldots, b_T)$ is fed into a causal GPT with
+$L_2$ transformer layers. Rotary position embeddings (RoPE) are applied
+to query and key vectors only, preserving each $b_t$ as a pure semantic
+summary of its contents:
+\begin{equation}
+A = \operatorname{softmax}\!\left(\frac{\operatorname{RoPE}(Q)\,\operatorname{RoPE}(K)^\top}{\sqrt{d}} + M_{\text{causal}}\right)
+\end{equation}
+
+RoPE is used rather than learned positional embeddings because basket
+sequences vary in length across users, and RoPE generalizes to
+unseen lengths by encoding relative position in the attention inner
+product. Loss is computed at every position $t = 1, \ldots, T-1$,
+providing a training signal from the full history. The output at the
+final position is $\hat{h}_{T+1} \in \mathbb{R}^d$, the predicted
+next-basket representation.
+
+\subsection{Orthogonal Intent-Fill Decomposition}
+
+$\hat{h}_{T+1}$ contains mixed signal: some directions encode the
+dominant purchase intent and others encode peripheral fill structure.
+We separate them via a learned low-rank orthogonal projection
+$P \in \mathbb{R}^{d \times d_k}$ ($d_k < d$) with orthonormal columns
+($P^\top P = I_{d_k}$):
+\begin{align}
+\hat{h}^{\text{intent}} &= PP^\top \hat{h}_{T+1} \\
+\hat{h}^{\text{fill}}   &= \hat{h}_{T+1} - PP^\top \hat{h}_{T+1}
+\end{align}
+
+By construction $\hat{h}^{\text{intent}} + \hat{h}^{\text{fill}} =
+\hat{h}_{T+1}$ exactly, and the two components are orthogonal.
+Orthonormality is enforced via periodic Gram-Schmidt
+re-orthonormalization. An orthogonality regularizer
+$\mathcal{L}_{\text{orth}} = \|\hat{h}^{\text{intent}} \cdot
+\hat{h}^{\text{fill}}\|^2$ prevents drift toward the identity during
+training.
+
+\subsection{Conditioned Two-Stage Decoding}
+\label{subsec:decode}
+
+The core design choice in our decoder is that fill prediction is
+conditioned on intent prediction, not run in parallel from a combined
+score. Combining intent and fill scores additively would allow intent
+items to dominate all $K$ output slots when fill scores are weak.
+Instead we predict $K_1$ core items first, then predict $K_2$ fill
+items whose query has been shifted by the discovered intent.
+
+\paragraph{Stage 1 --- Core item prediction.}
+Items are scored against the intent component:
+\begin{equation}
+s_i^{\text{intent}} = e_i \cdot \hat{h}^{\text{intent}}
+\end{equation}
+
+During training we construct a soft intent context vector using a
+temperature-scaled softmax over all item scores---a differentiable
+proxy for the hard top-$K_1$ selection:
+\begin{equation}
+\tilde{c} = \sum_{i \in V} \operatorname{softmax}_\tau(s^{\text{intent}})_i \cdot e_i \in \mathbb{R}^d
+\end{equation}
+ At inference
+we run a residual loop: score all items against $\hat{h}^{\text{intent}}$,
+pick the best, subtract its projected contribution, repeat $K_1$ times:
+\begin{align}
+\hat{i}_k &= \operatorname*{arg\,max}_{i \notin \hat{C}}\; e_i \cdot r_{k-1}^{\text{intent}} \\
+r_k^{\text{intent}} &= r_{k-1}^{\text{intent}} - PP^\top e_{\hat{i}_k}
+\end{align}
+
+The residual loop enforces natural diversity: once an item is picked and
+subtracted, redundant items score low against the updated residual.
+
+\paragraph{Stage 2 --- Fill item prediction conditioned on intent.}
+The fill query is the fill component shifted by the soft intent context:
+\begin{equation}
+\hat{h}^{\text{fill} \mid \text{intent}} = \operatorname{LN}\!\left(\hat{h}^{\text{fill}} + W_{\text{cond}}\, \tilde{c}\right)
+\end{equation}
+
+$W_{\text{cond}} \in \mathbb{R}^{d \times d}$ is learned end-to-end.
+This shifts the fill query toward the embedding neighborhood of
+whatever intent was discovered, so fill items are predicted as
+complements to the specific discovered intent rather than in the
+abstract. At inference we use $\tilde{c} = \bar{e}_{\hat{C}} =
+\frac{1}{K_1}\sum_{k} e_{\hat{i}_k}$ (mean of predicted core
+embeddings) and run the residual loop in the fill subspace:
+\begin{align}
+\hat{i}_{K_1+k} &= \operatorname*{arg\,max}_{i \notin \hat{C}}\; e_i \cdot r_{k-1}^{\text{fill}} \\
+r_k^{\text{fill}} &= r_{k-1}^{\text{fill}} - (I - PP^\top) e_{\hat{i}_{K_1+k}}
+\end{align}
+
+The differentiable bridge $\tilde{c}$ means that gradients from
+$\mathcal{L}_{\text{fill}}$ flow back through $W_{\text{cond}}$,
+through $\tilde{c}$, and into $s^{\text{intent}}$, jointly training
+both stages. The intent head is incentivized to produce representations
+that are useful not only for core prediction but also for conditioning
+fill prediction.
+
+\subsection{Training Objective}
+
+The ground-truth basket is partitioned using a threshold $\tau_\alpha$
+on $\alpha^{IDF}$:
+\begin{equation}
+C^*_{T+1} = \{i \in B_{T+1} : \alpha_i^{IDF} > \tau_\alpha\},\quad
+F^*_{T+1} = B_{T+1} \setminus C^*_{T+1}
+\end{equation}
+
+The intent loss is weighted by $\alpha^{IDF}$ so that missing
+load-bearing items incurs a larger penalty:
+\begin{equation}
+\mathcal{L}_{\text{intent}} = -\frac{1}{T}\sum_t \sum_j \alpha_j^{IDF}
+  \bigl[y_{t,j}\log\sigma(s_j^{\text{intent}})
+       + (1-y_{t,j})\log(1-\sigma(s_j^{\text{intent}}))\bigr]
+\end{equation}
+
+The fill loss is computed on the conditioned fill scores with uniform
+item weights:
+\begin{equation}
+\mathcal{L}_{\text{fill}} = -\frac{1}{T}\sum_t
+  \sum_{j \in F^*_{t+1}}
+  \bigl[y_{t,j}\log\sigma(s_j^{\text{fill}\mid\text{intent}})
+       + (1-y_{t,j})\log(1-\sigma(s_j^{\text{fill}\mid\text{intent}}))\bigr]
+\end{equation}
+
+The total loss is:
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\text{intent}}
+            + \lambda\,\mathcal{L}_{\text{fill}}
+            + \gamma\,\mathcal{L}_{\text{orth}}
+            + \eta\,\mathcal{L}_{\text{MLM}}
+\end{equation}
+
+\subsection{Training Schedule}
+
+Training proceeds in four phases. In \textbf{Phase 0}, $E$ is
+initialized via skip-gram. In \textbf{Phase 1} (warmup), BERT, GPT,
+and the gated fusion are trained with uniform BCE; the importance head
+is frozen. In \textbf{Phase 2}, BERT is frozen and $\alpha^{IDF}$
+scores are computed via the leave-one-out passes; the importance head
+is pre-trained to reproduce them. In \textbf{Phase 3}, all components
+are unfrozen and trained jointly with the full loss.
+
+
+%-----------------------------------------------------------------------
+\section{Inference}
+\label{sec:inference}
+
+At inference time no gradients are computed and the soft intent context
+$\tilde{c}$ is replaced by its hard counterpart. The full procedure
+for a user with basket history $(B_1, \ldots, B_T)$ is as follows.
+
+\paragraph{Step 1 --- Encode history.}
+Each past basket $B_j$ is passed through the BERT encoder and
+importance head to produce $h_{\text{CLS}}^j$, $\{h_k^j\}$, and
+$\{\alpha_{i_k}^j\}$. The dual-stream gated fusion yields one
+basket vector per timestep:
+\begin{equation}
+b_j = g_j \odot h_{\text{CLS}}^j + (1 - g_j) \odot b_j^{\text{core}},
+\quad j = 1, \ldots, T
+\end{equation}
+
+\paragraph{Step 2 --- Predict next basket representation.}
+The sequence $(b_1, \ldots, b_T)$ is passed through the causal GPT.
+The output at the final position is the predicted next-basket
+representation:
+\begin{equation}
+\hat{h}_{T+1} = \text{GPT}(b_1, \ldots, b_T) \in \mathbb{R}^d
+\end{equation}
+
+\paragraph{Step 3 --- Decompose into intent and fill.}
+The learned projection $P$ splits $\hat{h}_{T+1}$ into orthogonal
+components:
+\begin{equation}
+\hat{h}^{\text{intent}} = PP^\top \hat{h}_{T+1}, \qquad
+\hat{h}^{\text{fill}}   = \hat{h}_{T+1} - PP^\top \hat{h}_{T+1}
+\end{equation}
+
+\paragraph{Step 4 --- Core item decoding via residual loop.}
+Initialize $r_0^{\text{intent}} = \hat{h}^{\text{intent}}$ and
+$\hat{C} = \varnothing$. For $k = 1, \ldots, K_1$:
+\begin{align}
+\hat{i}_k &= \operatorname*{arg\,max}_{i \notin \hat{C}}\;
+             e_i \cdot r_{k-1}^{\text{intent}} \\
+r_k^{\text{intent}} &= r_{k-1}^{\text{intent}} - PP^\top e_{\hat{i}_k} \\
+\hat{C} &\leftarrow \hat{C} \cup \{\hat{i}_k\}
+\end{align}
+
+Each selected item's projected embedding is subtracted from the
+residual before the next query. Items that point in the same direction
+as an already-selected item score low against the updated residual,
+preventing redundant picks without any explicit diversity constraint.
+
+\paragraph{Step 5 --- Condition fill query on discovered core.}
+Compute the mean embedding of the predicted core set:
+\begin{equation}
+\bar{e}_{\hat{C}} = \frac{1}{K_1} \sum_{k=1}^{K_1} e_{\hat{i}_k}
+\end{equation}
+
+Shift the fill component toward the discovered intent neighborhood:
+\begin{equation}
+\hat{h}^{\text{fill} \mid \text{intent}}
+  = \operatorname{LN}\!\left(\hat{h}^{\text{fill}}
+    + W_{\text{cond}}\,\bar{e}_{\hat{C}}\right)
+\end{equation}
+
+This is the hard inference counterpart of the soft bridge $\tilde{c}$
+used during training. The fill query now encodes not just the generic
+fill signal from $\hat{h}^{\text{fill}}$ but also the specific
+embedding context of what the intent stage actually predicted.
+
+\paragraph{Step 6 --- Fill item decoding via conditioned residual loop.}
+Initialize $r_0^{\text{fill}} = \hat{h}^{\text{fill} \mid \text{intent}}$.
+For $k = 1, \ldots, K_2$:
+\begin{align}
+\hat{i}_{K_1+k} &= \operatorname*{arg\,max}_{i \notin \hat{C}}\;
+                   e_i \cdot r_{k-1}^{\text{fill}} \\
+r_k^{\text{fill}} &= r_{k-1}^{\text{fill}}
+                   - (I - PP^\top) e_{\hat{i}_{K_1+k}} \\
+\hat{C} &\leftarrow \hat{C} \cup \{\hat{i}_{K_1+k}\}
+\end{align}
+
+Fill item embeddings are projected into the fill subspace before
+subtraction to keep the residual within that subspace. Items already
+selected in Stage 1 are excluded from the candidate set.
+
+\paragraph{Final output.}
+The predicted basket is:
+\begin{equation}
+\hat{B}_{T+1} = \hat{C}, \quad |\hat{B}_{T+1}| = K_1 + K_2
+\end{equation}
+
+The two hyperparameters $K_1$ and $K_2$ control the size of the core
+and fill sets respectively. In practice $K_1$ is small (typically
+1--3) and $K_2$ is set to match the target basket size minus $K_1$.
+Both can be tuned on a validation set or set per-user based on
+historical average basket size.
+
+The entire inference procedure reduces to matrix--vector multiplications
+and nearest-neighbor lookups in $E$, which can be accelerated with
+approximate nearest-neighbor indices (e.g., FAISS) over the full
+catalog. The computational cost is $O((K_1 + K_2) \cdot |V|)$ scoring
+operations after the BERT and GPT forward passes, linear in catalog
+size and basket size.
+
+
+%-----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented an intent-aware next basket recommendation system that
+makes explicit the asymmetry between load-bearing and peripheral items
+present in every basket. A geometric importance score, corrected for
+population frequency, initializes a learned importance head that shapes
+both the basket representation and the training signal. A dual-stream
+gated encoder produces a basket representation that blends full-basket
+context with an importance-filtered intent centroid. A causal GPT models
+basket sequences and produces a predicted next-basket vector, which a
+low-rank orthogonal projection decomposes into intent and fill
+components. Decoding proceeds in two conditioned stages connected by a
+differentiable soft intent context, preventing intent items from crowding
+fill slots while keeping the two stages jointly trained.
+
+Future work will evaluate on standard benchmarks (Dunnhumby, Instacart,
+TaFeng) with separate Repeat Recall@$K$ and Explore Recall@$K$ metrics
+and will explore extending the two-level decomposition to finer
+hierarchical intent structures.
+
+%-----------------------------------------------------------------------
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

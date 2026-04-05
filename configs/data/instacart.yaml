@@ -1,0 +1,5 @@
+# Instacart dataset config
+data_dir: data/raw/instacart
+processed_dir: data/processed/instacart
+min_baskets_per_user: 3
+min_item_freq: 5

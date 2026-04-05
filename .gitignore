@@ -1,0 +1,67 @@
+# ============================================
+# Dependencies & Virtual Environments
+# ============================================
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ============================================
+# uv / pip
+# ============================================
+uv.lock
+.ruff_cache/
+
+# ============================================
+# Data — never commit raw or processed data
+# ============================================
+data/raw/
+data/processed/
+*.parquet
+*.csv
+*.csv.gz
+*.jsonl
+*.npy
+*.npz
+*.bin
+*.kv
+
+# ============================================
+# IDE / Editor
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============================================
+# Checkpoints, logs, outputs
+# ============================================
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.log
+wandb/
+*.json  # results files (keep small configs, ignore large outputs)
+
+# ============================================
+# Temporary / scratch files
+# ============================================
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# ============================================
+# OS
+# ============================================
+Thumbs.db
+.DS_Store
