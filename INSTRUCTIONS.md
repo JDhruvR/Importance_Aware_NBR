@@ -19,6 +19,23 @@ independently evaluable so ablations come for free.
 
 ---
 
+## Collaboration Hygiene (Required)
+
+Before any push:
+- Update `CHANGELOG.md` with all meaningful changes (one bullet per file/module touched).
+- Overwrite `CONTEXT.md` with a precise snapshot of the current state.
+- Update `INSTRUCTIONS.md` if new decisions or workflows are introduced.
+- Add results to `results/` in a clean, human-readable format whenever a run produces metrics.
+
+All collaborators must follow this so downstream work is predictable and resumable.
+
+## Keep This File Compact
+
+Target length: ~200 lines. If it grows beyond that, consolidate or move detail to
+other docs (e.g., `CHANGELOG.md` or `results/`). Reduce length before pushing.
+
+---
+
 ## Dataset Downloads (Human Instructions)
 
 These are manual steps for humans. Do not automate authentication.
@@ -101,40 +118,7 @@ work session or after completing a phase.**
 ## Repository Layout
 
 ```
-nbr/
-├── changelog.md
-├── context.md
-├── configs/
-│   ├── data/          # per-dataset configs
-│   ├── model/         # vanilla, dual_stream, full
-│   └── train/         # optimizer, scheduler, loss weights
-├── data/
-│   ├── raw/           # downloaded archives, never committed
-│   └── processed/     # parquet files from preprocessing
-├── nbr/
-│   ├── data/          # dataset classes, collators, splits
-│   ├── models/
-│   │   ├── embeddings.py
-│   │   ├── encoder.py
-│   │   ├── importance.py
-│   │   ├── fusion.py
-│   │   ├── gpt.py
-│   │   ├── projection.py
-│   │   └── decoder.py
-│   ├── losses.py
-│   ├── metrics.py
-│   └── trainer.py
-├── scripts/
-│   ├── download_data.py
-│   ├── preprocess.py
-│   ├── compute_importance.py
-│   └── evaluate.py
-├── experiments/
-│   ├── 01_vanilla.py
-│   ├── 02_dual_stream.py
-│   └── 03_full_model.py
-├── tests/
-└── pyproject.toml
+configs/   data/   nbr/   scripts/   experiments/   tests/   results/
 ```
 
 ---
@@ -185,13 +169,7 @@ Dimension shorthands: `B` batch, `T` sequence, `S` items/basket, `D` hidden, `V`
 
 ## Experiment Progression
 
-| Stage | File | What changes |
-|---|---|---|
-| Vanilla | `01_vanilla.py` | BERT mean-pool + GPT + dot-product top-K |
-| Dual-stream | `02_dual_stream.py` | + importance head + gated fusion |
-| Full | `03_full_model.py` | + orthogonal decomp + two-stage decoder |
-
-Same split, same seed across all experiments for fair comparison.
+Vanilla → Dual-stream → Full, same split and seed across experiments.
 
 ---
 
@@ -200,10 +178,3 @@ Same split, same seed across all experiments for fair comparison.
 Report Recall@K, Repeat Recall@K, Explore Recall@K, NDCG@K for K ∈ {5, 10, 20}.
 Split: last basket → test, second-to-last → val, rest → train.
 Filter: users with < 3 baskets and items appearing < 5 times in training.
-
----
-
-## Reproducibility Checklist
-
-Before logging a result: seed fixed and logged · split is deterministic ·
-config saved with checkpoint · val metric for early stopping matches reported metric.

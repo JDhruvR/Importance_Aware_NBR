@@ -64,3 +64,6 @@
 
 ## 2026-04-06 — Baseline results tracking
 - Added: results/baseline_eval.md with commands and subset metrics for all datasets (full runs pending)
+
+## 2026-04-06 — Collaboration hygiene
+- Changed: INSTRUCTIONS.md to require changelog/context/results updates before push
