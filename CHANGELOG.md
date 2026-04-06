@@ -67,3 +67,10 @@
 
 ## 2026-04-06 — Collaboration hygiene
 - Changed: INSTRUCTIONS.md to require changelog/context/results updates before push
+
+## 2026-04-06 — BERT+GPT vanilla model
+- Added: nbr/models/bert_gpt/model.py with BertGptNBR (CLS basket repr + GPT + dot logits)
+- Added: nbr/models/bert_gpt/__init__.py to expose BertGptNBR
+
+## 2026-04-06 — Dataset documentation
+- Added: data/dataset_description.md with schema, source files, and stats for all datasets

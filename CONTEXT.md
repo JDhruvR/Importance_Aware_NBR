@@ -22,6 +22,7 @@ Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), a
 - T2.2: nbr/models/encoder.py — IntraBasketEncoder with CLS token, TransformerEncoderLayer
 - T2.3: nbr/models/gpt.py — RoPEAttention + CausalBasketGPT (causality verified)
 - T2.4: nbr/models/vanilla.py — VanillaNBR (embeddings -> encoder mean-pool -> GPT -> dot-product logits)
+- T2.6: added — bert_gpt vanilla model (CLS basket repr + GPT + dot-product logits)
 
 **Phase 2 — Baselines (Frequency):**
 - T2.5: started — nbr/baselines/frequency.py and scripts/evaluate_baselines.py created (evaluation needs runtime tuning)
@@ -45,6 +46,7 @@ T2.5 — Frequency baselines: finish evaluation runtime on full datasets and ver
 - Baseline evaluation uses basket-level histories from train split; test targets are last basket per user
 - Baseline results are tracked in `results/` with command provenance
 - Collaborators must update CHANGELOG/CONTEXT/INSTRUCTIONS before pushing
+- Dataset schema and stats are documented in data/dataset_description.md
 
 ## Broken / Incomplete
 - Need to run baseline evaluation on full datasets (subset runs done)

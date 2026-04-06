@@ -131,14 +131,17 @@ def preprocess_dunnhumby(
             raise RuntimeError(
                 f"{f.name} missing columns: {missing}. Verify the extracted Dunnhumby sample."
             )
-        frames.append(
-            df.select(required).with_columns(
+        cleaned = (
+            df.select(required)
+            .with_columns(
                 pl.col("CUST_CODE").cast(pl.Utf8),
                 pl.col("PROD_CODE").cast(pl.Utf8),
                 pl.col("BASKET_ID").cast(pl.Utf8),
                 pl.col("SHOP_DATE").cast(pl.Int64),
             )
+            .filter(pl.col("CUST_CODE").is_not_null() & (pl.col("CUST_CODE") != ""))
         )
+        frames.append(cleaned)
     transactions = pl.concat(frames, how="vertical")
 
     if "CUST_CODE" not in transactions.columns:
@@ -164,7 +167,7 @@ def preprocess_dunnhumby(
     )
 
     basket_days = basket_days.with_columns(
-        pl.col("BASKET_ID").rank(method="ordinal").over("CUST_CODE").alias("order_idx") - 1,
+        pl.int_range(0, pl.len()).over("CUST_CODE").alias("order_idx"),
     )
 
     merged = transactions.join(
