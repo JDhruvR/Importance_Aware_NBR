@@ -16,13 +16,22 @@ class BasketSequenceDataset(Dataset):
     (excluding the last one), and the target is the last basket.
     """
 
-    def __init__(self, df: pl.DataFrame, max_seq_len: int) -> None:
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        max_seq_len: int,
+        min_history_len: int = 0,
+    ) -> None:
         """
         Args:
             df: train DataFrame with columns [user_id: i32, order_idx: i32, item_id: i32].
             max_seq_len: maximum number of historical baskets to use as input.
+            min_history_len: minimum number of history baskets required.
         """
+        if min_history_len < 0:
+            raise ValueError("min_history_len must be >= 0")
         self.max_seq_len = max_seq_len
+        self.min_history_len = min_history_len
 
         # Group baskets by user, sorted by order_idx
         # user_baskets[user_id] = [[item_ids for basket 0], [item_ids for basket 1], ...]
@@ -47,7 +56,7 @@ class BasketSequenceDataset(Dataset):
                 if current_user is not None:
                     if current_basket:
                         user_basket_list.append(current_basket)
-                    if user_basket_list:
+                    if len(user_basket_list) >= self.min_history_len + 1:
                         self.user_baskets[current_user] = user_basket_list
                         self.user_ids.append(current_user)
                 current_user = uid
@@ -67,7 +76,7 @@ class BasketSequenceDataset(Dataset):
         if current_user is not None:
             if current_basket:
                 user_basket_list.append(current_basket)
-            if user_basket_list:
+            if len(user_basket_list) >= self.min_history_len + 1:
                 self.user_baskets[current_user] = user_basket_list
                 self.user_ids.append(current_user)
 

@@ -88,3 +88,21 @@
 
 ## 2026-04-06 — Training workflow guidance
 - Changed: INSTRUCTIONS.md to clarify training loop and HPO tooling preferences
+
+## 2026-04-06 — Training scaffolding
+- Added: nbr/train/data_module.py for Lightning dataloaders
+- Added: nbr/train/vanilla_lightning.py Lightning module for vanilla/BERT+GPT
+- Added: nbr/metrics/ranking.py with Recall/NDCG and repeat/explore helpers
+- Added: nbr/utils/logger.py for loguru and W&B environment setup
+- Added: scripts/train_vanilla.py Lightning training entrypoint
+- Changed: configs/train/default.yaml with trainer/logging settings
+- Changed: configs/model/vanilla.yaml to include model_type
+- Added: nbr/train/__init__.py and nbr/metrics/__init__.py
+- Changed: pyproject.toml to include lightning dependency
+
+## 2026-04-06 — Dual-stream/full training scaffolding
+- Added: nbr/train/importance_lightning.py for importance-aware Lightning training
+- Added: nbr/models/dual_stream.py and nbr/models/full.py placeholders with vanilla backbone
+- Added: scripts/train_importance.py training entrypoint for dual-stream/full
+- Changed: configs/model/dual_stream.yaml and configs/model/full.yaml to include model_type
+- Changed: nbr/models/__init__.py to export new model stubs

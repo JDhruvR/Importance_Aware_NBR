@@ -1,7 +1,7 @@
 # Context
 
 ## Current State
-Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done. Data preprocessing was run on all three datasets with the currently available files. Frequency baselines and evaluation script are implemented; full-dataset metrics and GPTopFreq alpha sweeps are logged in `results/baseline_eval.md` (subset runs retained for reference).
+Phase 3 — Training scaffolding started. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done. Data preprocessing was run on all three datasets with the currently available files. Frequency baselines and evaluation script are implemented; full-dataset metrics and GPTopFreq alpha sweeps are logged in `results/baseline_eval.md` (subset runs retained for reference). Training scripts and Lightning modules are now scaffolded; no training runs executed yet.
 
 ## Completed Tasks
 **Phase 0 — Repo Bootstrap:**
@@ -31,7 +31,7 @@ Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), a
 - results/baseline_eval.md — 2k-user subset metrics for Instacart, TaFeng, Dunnhumby (full runs pending)
 
 ## Next Task
-T3 — Create experiments/ training loops and start model training runs (vanilla then dual-stream/full). Verify end-to-end training with full datasets and report initial metrics.
+T3 — Implement training loops for vanilla/dual-stream/full and add experiment configs; start training runs when requested.
 
 ## Decisions Made
 - Paper: "Not All Items Are Created Equal: Importance-Aware Next Basket Recommendation"
@@ -53,7 +53,8 @@ T3 — Create experiments/ training loops and start model training runs (vanilla
 - Processed data will be distributed via a zip; raw data not required once processed is available
 
 ## Broken / Incomplete
-- Need to create experiments/ directory and training scripts (do not run training yet)
+- Dual-stream/full models are stubbed with vanilla backbone; importance losses still need real implementation
+- Need to create experiments/ directory and write experiment configs
 - Need to create tests/ directory and write unit tests
 
 ## Best Val Metrics

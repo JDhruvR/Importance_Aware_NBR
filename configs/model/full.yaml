@@ -1,4 +1,5 @@
 # Full intent-aware NBR model config
+model_type: full
 D: 128
 L1: 2
 L2: 2

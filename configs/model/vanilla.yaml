@@ -1,4 +1,5 @@
 # Vanilla NBR model config
+model_type: vanilla
 D: 128          # embedding / hidden dimension
 L1: 2           # intra-basket encoder layers
 L2: 2           # inter-basket GPT layers

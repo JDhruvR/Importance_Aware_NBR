@@ -1,4 +1,5 @@
 # Dual-stream NBR model config
+model_type: dual_stream
 D: 128
 L1: 2
 L2: 2
