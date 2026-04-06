@@ -81,3 +81,10 @@
 
 ## 2026-04-06 — README data setup
 - Added: README.md with processed data zip instructions (raw data optional)
+
+## 2026-04-06 — Full baseline evaluation
+- Changed: results/baseline_eval.md with full-dataset metrics and GPTopFreq alpha sweeps
+- Changed: CONTEXT.md snapshot updated after baseline evaluation completion
+
+## 2026-04-06 — Training workflow guidance
+- Changed: INSTRUCTIONS.md to clarify training loop and HPO tooling preferences

@@ -109,6 +109,8 @@ work session or after completing a phase.**
 - **Config:** `hydra-core`. Every hyperparameter lives in `configs/`. Models and
   trainers accept plain Python types, never config objects.
 - **Logging:** `wandb` for metrics, `loguru` for console.
+- **Training loops:** PyTorch Lightning is allowed/preferred when it reduces boilerplate; keep modules and callbacks modular.
+- **HPO:** prefer W&B Sweeps for hyperparameter tuning; add other optimizers (e.g., Optuna) only if needed.
 - **Data:** `polars` for preprocessing, `numpy` for array ops outside PyTorch.
 - **Nearest neighbor:** `faiss-cpu` (or `faiss-gpu`) at inference.
 - **Reproducibility:** single `utils/seed.py` helper seeds Python, NumPy, PyTorch, CUDA.
@@ -170,6 +172,8 @@ Dimension shorthands: `B` batch, `T` sequence, `S` items/basket, `D` hidden, `V`
 ## Experiment Progression
 
 Vanilla → Dual-stream → Full, same split and seed across experiments.
+
+Do not run training jobs unless explicitly requested; implement scripts/configs first.
 
 ---
 

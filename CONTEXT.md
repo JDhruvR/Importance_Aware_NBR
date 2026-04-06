@@ -1,7 +1,7 @@
 # Context
 
 ## Current State
-Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done. Data preprocessing was run on all three datasets with the currently available files. Frequency baselines and evaluation script are implemented; subset baseline metrics are logged in `results/baseline_eval.md`.
+Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done. Data preprocessing was run on all three datasets with the currently available files. Frequency baselines and evaluation script are implemented; full-dataset metrics and GPTopFreq alpha sweeps are logged in `results/baseline_eval.md` (subset runs retained for reference).
 
 ## Completed Tasks
 **Phase 0 — Repo Bootstrap:**
@@ -31,13 +31,15 @@ Phase 2 — Baselines completed. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), a
 - results/baseline_eval.md — 2k-user subset metrics for Instacart, TaFeng, Dunnhumby (full runs pending)
 
 ## Next Task
-T2.5 — Frequency baselines: finish evaluation runtime on full datasets and verify baseline metrics.
+T3 — Create experiments/ training loops and start model training runs (vanilla then dual-stream/full). Verify end-to-end training with full datasets and report initial metrics.
 
 ## Decisions Made
 - Paper: "Not All Items Are Created Equal: Importance-Aware Next Basket Recommendation"
 - Three datasets: Instacart, Dunnhumby, TaFeng
 - Three model tiers: vanilla → dual_stream → full
 - CPU-only PyTorch installed (torch 2.11.0+cpu)
+- Training loops should favor modular scripts with heavy W&B logging; PyTorch Lightning is allowed/preferred when it reduces boilerplate
+- Hyperparameter tuning should use W&B Sweeps first; add other optimizers (e.g., Optuna) only if needed
 - All preprocessing logic in single scripts/preprocess.py with shared helper
 - BasketSequenceDataset: one sample per user, target = last basket, input = up to max_seq_len historical baskets
 - ItemEmbedding.weight accessed via self.item_embedding.embedding.weight
@@ -51,13 +53,11 @@ T2.5 — Frequency baselines: finish evaluation runtime on full datasets and ver
 - Processed data will be distributed via a zip; raw data not required once processed is available
 
 ## Broken / Incomplete
-- Need to run baseline evaluation on full datasets (subset runs done)
-- Need to run GPTopFreq alpha sweeps
-- Need to create experiments/ directory and training loops
+- Need to create experiments/ directory and training scripts (do not run training yet)
 - Need to create tests/ directory and write unit tests
 
 ## Best Val Metrics
 None yet.
 
-## Baseline Metrics (subset runs)
-- Logged 2k-user subset results in results/baseline_eval.md
+## Baseline Metrics (full datasets)
+- Logged full-dataset frequency baseline metrics and GPTopFreq alpha sweeps in results/baseline_eval.md
