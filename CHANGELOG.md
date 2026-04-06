@@ -74,3 +74,10 @@
 
 ## 2026-04-06 — Dataset documentation
 - Added: data/dataset_description.md with schema, source files, and stats for all datasets
+
+## 2026-04-06 — Metadata tables in preprocessing
+- Changed: scripts/preprocess.py to emit items/basket_meta/basket_items/user_meta tables
+- Changed: scripts/preprocess.py to filter missing Dunnhumby customers and align columns
+
+## 2026-04-06 — README data setup
+- Added: README.md with processed data zip instructions (raw data optional)

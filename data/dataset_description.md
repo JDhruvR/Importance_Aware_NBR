@@ -2,11 +2,11 @@
 
 This document describes the three datasets we preprocess into a unified basket format
 and the resulting processed schema/statistics. All processed files live under
-`data/processed/{dataset}/` and share the same schema.
+`data/processed/{dataset}/`.
 
-## Common Processed Schema
+## Common Processed Tables
 
-File: `data/processed/{dataset}/baskets.parquet`
+### 1) baskets.parquet (shared across datasets)
 
 Columns:
 - `user_id` (int32): contiguous user index starting at 0
@@ -27,14 +27,26 @@ So variable-length baskets are handled by grouping rows per basket at runtime:
   - `item_mask`: (B, T, S)
   - `basket_mask`: (B, T)
 
-**Product features:**  
-Right now **only the item ID** is used. The “feature vector” for each product is simply a **learned embedding** from `ItemEmbedding`. We do **not** include product metadata like category, aisle, price, etc. Those fields are not kept in the processed dataset at the moment.
-
-**Notes:**
-
+Notes:
 - Each row represents a single item within a basket.
 - `order_idx` is constructed per user from the raw dataset’s temporal fields.
 - Users with < 3 baskets and items with < 5 appearances are filtered out.
+
+### 2) items.parquet (item metadata)
+
+Each dataset has an item metadata table with all available item-level attributes.
+
+### 3) basket_meta.parquet (basket-level metadata)
+
+Optional basket-level fields derived from raw orders/transactions.
+
+### 4) basket_items.parquet (item-in-basket metadata)
+
+Optional per-item purchase attributes (e.g., reorder flags, amounts).
+
+### 5) user_meta.parquet (user metadata, if available)
+
+Optional user-level attributes when present in raw data.
 
 ## Instacart (Kaggle)
 
@@ -44,6 +56,7 @@ Raw files used:
 - `orders.csv`
 - `order_products__prior.csv`
 - `order_products__train.csv`
+- `products.csv`, `aisles.csv`, `departments.csv`
 
 Raw key fields:
 - `orders.csv`: `order_id`, `user_id`, `order_number`
@@ -53,7 +66,7 @@ Processing notes:
 - Prior + train splits are merged before joining with orders.
 - `order_number` is converted to `order_idx = order_number - 1`.
 
-Processed stats:
+Processed stats (baskets.parquet):
 - Rows: 33,813,577
 - Users: 206,209
 - Items: 47,975
@@ -76,14 +89,14 @@ Processing notes:
 - Same-day purchases are treated as one basket per customer.
 - `order_idx` is derived from sorted transaction dates per user.
 
-Processed stats:
+Processed stats (baskets.parquet):
 - Rows: 795,321
 - Users: 29,197
 - Items: 15,743
 - Baskets per user: min 1 / p25 1 / median 2 / mean 3.97 / p75 5 / max 86
 - Items per basket: min 1 / p25 2 / median 5 / mean 6.87 / p75 9 / max 111
 
-## Dunnhumby (Sample ZIP)
+## Dunnhumby (sample ZIP)
 
 Raw source: `data/raw/dunnhumby/`
 
@@ -102,12 +115,104 @@ Processing notes:
 - `order_idx` is a 0-indexed sequence per user based on sorted `SHOP_DATE` + `BASKET_ID`.
 - Multiple transaction files are concatenated after selecting only the required columns.
 
-Processed stats:
+Processed stats (baskets.parquet):
 - Rows: 25,193,229
 - Users: 48,125
 - Items: 4,997
 - Baskets per user: min 1 / p25 8 / median 41 / mean 78.75 / p75 115 / max 1,157
 - Items per basket: min 1 / p25 2 / median 4 / mean 6.65 / p75 9 / max 101
+
+## Dataset-Specific Schemas
+
+### Instacart
+
+**items.parquet**
+```
+item_id         int32
+product_id_raw  int64
+product_name    str
+aisle_id        int32
+aisle           str
+department_id   int32
+department      str
+```
+
+**basket_meta.parquet**
+```
+user_id                int32
+order_idx              int32
+order_dow              int32
+order_hour_of_day      int32
+days_since_prior_order float32
+```
+
+**basket_items.parquet**
+```
+user_id           int32
+order_idx         int32
+item_id           int32
+add_to_cart_order int32
+reordered         int32
+```
+
+### TaFeng
+
+**items.parquet**
+```
+item_id          int32
+product_id_raw   str
+product_subclass int32
+```
+
+**user_meta.parquet**
+```
+user_id   int32
+AGE_GROUP str
+PIN_CODE  str
+```
+
+**basket_meta.parquet**
+```
+user_id   int32
+order_idx int32
+date      date
+```
+
+**basket_items.parquet**
+```
+user_id     int32
+order_idx   int32
+item_id     int32
+AMOUNT      float32
+ASSET       float32
+SALES_PRICE float32
+```
+
+### Dunnhumby (sample)
+
+**items.parquet**
+```
+item_id       int32
+prod_code_raw str
+prod_code_10  str
+prod_code_20  str
+prod_code_30  str
+prod_code_40  str
+```
+
+**basket_meta.parquet**
+```
+user_id   int32
+order_idx int32
+SHOP_DATE int64
+```
+
+**basket_items.parquet**
+```
+user_id   int32
+order_idx int32
+item_id   int32
+```
 
 ## How to Use in Models
 

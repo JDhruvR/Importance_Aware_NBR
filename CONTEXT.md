@@ -47,6 +47,8 @@ T2.5 — Frequency baselines: finish evaluation runtime on full datasets and ver
 - Baseline results are tracked in `results/` with command provenance
 - Collaborators must update CHANGELOG/CONTEXT/INSTRUCTIONS before pushing
 - Dataset schema and stats are documented in data/dataset_description.md
+- Metadata tables (items/basket_meta/basket_items/user_meta) are now emitted during preprocessing
+- Processed data will be distributed via a zip; raw data not required once processed is available
 
 ## Broken / Incomplete
 - Need to run baseline evaluation on full datasets (subset runs done)
