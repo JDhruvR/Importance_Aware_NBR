@@ -27,6 +27,10 @@ Phase 3 — Training scaffolding started. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1
 **Phase 2 — Baselines (Frequency):**
 - T2.5: started — nbr/baselines/frequency.py and scripts/evaluate_baselines.py created (evaluation needs runtime tuning)
 
+**Phase 2.5 — Pre-training:**
+- T2.7: Added `scripts/train_word2vec.py` to generate pre-trained item embeddings from basket data.
+- T2.8: Completed Word2Vec pre-training for all datasets. Embeddings are stored as `word2vec_dim128.kv` files, ready for model initialization.
+
 **Results:**
 - results/baseline_eval.md — 2k-user subset metrics for Instacart, TaFeng, Dunnhumby (full runs pending)
 

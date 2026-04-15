@@ -106,3 +106,9 @@
 - Added: scripts/train_importance.py training entrypoint for dual-stream/full
 - Changed: configs/model/dual_stream.yaml and configs/model/full.yaml to include model_type
 - Changed: nbr/models/__init__.py to export new model stubs
+
+## 2026-04-15 — Word2Vec pre-training script
+- Added: scripts/train_word2vec.py to pre-train item embeddings on basket data.
+- Changed: The script dynamically sets the window size to the max basket length per dataset.
+- Done: Trained embeddings for all 3 datasets and saved as `.kv` files in `data/processed/{dataset}/`.
+- Added: `scripts/check_embeddings.py` to validate trained Word2Vec embeddings by finding similar items.

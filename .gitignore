@@ -57,3 +57,8 @@ htmlcov/
 # ============================================
 Thumbs.db
 .DS_Store
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/

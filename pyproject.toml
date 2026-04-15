@@ -21,6 +21,11 @@ dependencies = [
     "ruff>=0.1.0"
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nbr*"]
+exclude = ["tests*"]
+
 [tool.ruff]
 line-length = 100
 select = ["E", "F", "I"]

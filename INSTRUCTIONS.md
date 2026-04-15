@@ -175,6 +175,14 @@ Vanilla → Dual-stream → Full, same split and seed across experiments.
 
 Do not run training jobs unless explicitly requested; implement scripts/configs first.
 
+1.  **Preprocessing:** Run `scripts/preprocess.py` if starting from raw data.
+2.  **Baselines:** Run `scripts/evaluate_baselines.py` to get frequency-based baseline metrics.
+3.  **Pre-training:** Run `scripts/train_word2vec.py` for each dataset to generate item embeddings. These are saved as `.kv` files.
+    ```bash
+    PYTHONPATH=. python scripts/train_word2vec.py --dataset <name>
+    ```
+4.  **Model Training:** Run `scripts/train_vanilla.py` and `scripts/train_importance.py` to train and evaluate the neural models, using the pre-trained embeddings.
+
 ---
 
 ## Evaluation Protocol
