@@ -1,6 +1,6 @@
 # BERT MLM warmup config
 lr: 5.0e-4
-batch_size: 256
+batch_size: 512
 epochs: 30
 warmup_steps: 1000
 min_lr_ratio: 0.05
@@ -16,8 +16,8 @@ monitor_mode: min
 wandb_project: importance-aware-nbr
 run_name: null
 
-mask_prob: 0.15
-val_mask_prob: 0.15
+mask_prob: 0.20
+val_mask_prob: 0.20
 max_items_per_basket: null
 max_train_baskets: null
 max_val_baskets: null
