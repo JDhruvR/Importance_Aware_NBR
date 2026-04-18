@@ -1,7 +1,7 @@
 # Context
 
 ## Current State
-Phase 3 baseline work now focused on plain BERT warmup only. Word2Vec embeddings already exist for all datasets in `data/processed/{dataset}/word2vec_dim128.kv`. New plain PyTorch BERT warmup pipeline is implemented and smoke-tested on TaFeng with W&B logging. PyTorch Lightning is explicitly removed for this BERT path and disallowed for new training loops by project instruction.
+Phase 3 baseline work now focused on plain BERT warmup only. Word2Vec embeddings already exist for all datasets in `data/processed/{dataset}/word2vec_dim128.kv`. New plain PyTorch BERT warmup pipeline is implemented and smoke-tested on TaFeng with W&B logging. PyTorch Lightning is explicitly removed for this BERT path and disallowed for new training loops by project instruction. Latest update fixes post-training sanity check device mismatch on GPU runs and adds clear per-epoch terminal timing/ETA prints.
 
 ## Completed Tasks
 

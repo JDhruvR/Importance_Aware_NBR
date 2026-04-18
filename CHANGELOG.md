@@ -123,3 +123,8 @@
 - Changed: INSTRUCTIONS.md to require plain PyTorch loops and add BERT warmup command.
 - Added: results/bert_warmup.md with smoke-run command, W&B link, and sanity metrics.
 - Changed: CONTEXT.md snapshot to reflect plain BERT warmup implementation and no-Lightning decision.
+
+## 2026-04-18 — BERT run stability and terminal progress
+- Changed: scripts/train_bert.py to move CLS sanity-check batches to model device, fixing CPU/GPU mismatch crash after training.
+- Changed: scripts/train_bert.py to print per-epoch train/val metrics, epoch time, elapsed time, and ETA in terminal.
+- Changed: CONTEXT.md with latest status note for run-stability update.

@@ -124,6 +124,7 @@ def _compute_cls_sanity(
         return {"adjacent_cos": 0.0, "random_cos": 0.0, "adj_minus_rand": 0.0}
 
     collator = BasketMLMCollator(num_items=num_items, apply_mlm=False)
+    device = next(model.parameters()).device
     cls_all: list[torch.Tensor] = []
     users: list[int] = []
     orders: list[int] = []
@@ -133,7 +134,9 @@ def _compute_cls_sanity(
         for i in range(0, len(samples), step):
             chunk = samples[i : i + step]
             batch = collator(chunk)
-            out = model(batch["input_ids"], batch["attention_mask"])
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            out = model(input_ids, attention_mask)
             cls_all.append(out["cls_repr"].cpu())
             users.extend(batch["user_ids"].tolist())
             orders.extend(batch["order_idxs"].tolist())
@@ -242,6 +245,14 @@ def main(cfg: DictConfig) -> None:
     last_ckpt = output_dir / "bert_last.pt"
     best_val = float("inf")
     global_step = 0
+    start_time = perf_counter()
+
+    print(
+        f"[bert] start dataset={Path(str(cfg.data.processed_dir)).name} "
+        f"epochs={int(cfg.train.epochs)} batch_size={int(cfg.train.batch_size)} "
+        f"device={device.type}",
+        flush=True,
+    )
 
     for epoch in range(1, int(cfg.train.epochs) + 1):
         model.train()
@@ -286,6 +297,18 @@ def main(cfg: DictConfig) -> None:
         train_acc = epoch_acc / max(1, epoch_steps)
         val_metrics = _run_eval(model, val_loader, device)
         epoch_time = perf_counter() - t0
+        elapsed = perf_counter() - start_time
+        avg_epoch = elapsed / epoch
+        eta = avg_epoch * (int(cfg.train.epochs) - epoch)
+
+        print(
+            "[bert] "
+            f"epoch={epoch}/{int(cfg.train.epochs)} "
+            f"train_loss={train_loss:.4f} val_loss={val_metrics['val/mlm_loss']:.4f} "
+            f"train_acc={train_acc:.4f} val_acc={val_metrics['val/masked_acc']:.4f} "
+            f"epoch_s={epoch_time:.1f} elapsed_s={elapsed:.1f} eta_s={eta:.1f}",
+            flush=True,
+        )
 
         run.log(
             {
