@@ -105,11 +105,11 @@ work session or after completing a phase.**
 ## Environment
 
 - **Package manager:** `uv` exclusively.
-- **Python:** 3.11+. **Framework:** PyTorch 2.x.
+- **Python:** 3.11+. **Framework:** PyTorch 2.x (plain PyTorch training loops).
 - **Config:** `hydra-core`. Every hyperparameter lives in `configs/`. Models and
   trainers accept plain Python types, never config objects.
 - **Logging:** `wandb` for metrics, `loguru` for console.
-- **Training loops:** PyTorch Lightning is allowed/preferred when it reduces boilerplate; keep modules and callbacks modular.
+- **Training loops:** Do not use PyTorch Lightning. Use plain PyTorch loops with small, modular helpers.
 - **HPO:** prefer W&B Sweeps for hyperparameter tuning; add other optimizers (e.g., Optuna) only if needed.
 - **Data:** `polars` for preprocessing, `numpy` for array ops outside PyTorch.
 - **Nearest neighbor:** `faiss-cpu` (or `faiss-gpu`) at inference.
@@ -181,7 +181,11 @@ Do not run training jobs unless explicitly requested; implement scripts/configs 
     ```bash
     PYTHONPATH=. python scripts/train_word2vec.py --dataset <name>
     ```
-4.  **Model Training:** Run `scripts/train_vanilla.py` and `scripts/train_importance.py` to train and evaluate the neural models, using the pre-trained embeddings.
+4.  **BERT Warmup (baseline stage):** Run `scripts/train_bert.py` to train plain basket-BERT with MLM using Word2Vec initialization.
+    ```bash
+    PYTHONPATH=. uv run python scripts/train_bert.py data=<instacart|tafeng|dunnhumby>
+    ```
+5.  **Model Training:** Run downstream model training scripts after warmup artifacts are available.
 
 ---
 

@@ -112,3 +112,14 @@
 - Changed: The script dynamically sets the window size to the max basket length per dataset.
 - Done: Trained embeddings for all 3 datasets and saved as `.kv` files in `data/processed/{dataset}/`.
 - Added: `scripts/check_embeddings.py` to validate trained Word2Vec embeddings by finding similar items.
+
+## 2026-04-18 — Plain PyTorch BERT warmup pipeline
+- Added: nbr/data/basket_mlm_dataset.py with basket-level MLM dataset/collator for plain BERT warmup.
+- Added: nbr/models/bert.py with BasketBERT model, MLM head, and Word2Vec initialization.
+- Added: nbr/train/bert_data_module.py as lightweight dataloader builder (no Lightning dependency).
+- Added: scripts/train_bert.py with plain PyTorch training loop, W&B logging, checkpointing, and sanity checks.
+- Added: configs/model/bert.yaml, configs/train/bert_warmup.yaml, configs/bert_warmup.yaml for BERT warmup runs.
+- Deleted: nbr/train/bert_lightning.py to enforce no-Lightning policy for new BERT training.
+- Changed: INSTRUCTIONS.md to require plain PyTorch loops and add BERT warmup command.
+- Added: results/bert_warmup.md with smoke-run command, W&B link, and sanity metrics.
+- Changed: CONTEXT.md snapshot to reflect plain BERT warmup implementation and no-Lightning decision.
