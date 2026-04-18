@@ -50,6 +50,16 @@ def _masked_accuracy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor
     return (pred[valid] == labels[valid]).float().mean()
 
 
+def _mlm_loss(logits: torch.Tensor, labels: torch.Tensor, label_smoothing: float) -> torch.Tensor:
+    vocab_size = logits.shape[-1]
+    return F.cross_entropy(
+        logits.reshape(-1, vocab_size),
+        labels.reshape(-1),
+        ignore_index=-100,
+        label_smoothing=label_smoothing,
+    )
+
+
 def _run_eval(model: BasketBERT, loader: DataLoader, device: torch.device) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
@@ -63,7 +73,7 @@ def _run_eval(model: BasketBERT, loader: DataLoader, device: torch.device) -> di
 
             out = model(input_ids, attention_mask)
             logits = out["mlm_logits"]
-            loss = model.mlm_loss(logits, labels)
+            loss = _mlm_loss(logits, labels, label_smoothing=0.0)
             acc = _masked_accuracy(logits, labels)
 
             total_loss += float(loss.item())
@@ -273,6 +283,7 @@ def main(cfg: DictConfig) -> None:
     global_step = 0
     start_time = perf_counter()
     no_improve_epochs = 0
+    label_smoothing = float(cfg.train.label_smoothing)
 
     print(
         f"[bert] start dataset={Path(str(cfg.data.processed_dir)).name} "
@@ -296,7 +307,7 @@ def main(cfg: DictConfig) -> None:
 
             out = model(input_ids, attention_mask)
             logits = out["mlm_logits"]
-            loss = model.mlm_loss(logits, labels)
+            loss = _mlm_loss(logits, labels, label_smoothing=label_smoothing)
             acc = _masked_accuracy(logits, labels)
 
             loss.backward()
@@ -363,7 +374,7 @@ def main(cfg: DictConfig) -> None:
             last_ckpt,
         )
 
-        if val_metrics["val/mlm_loss"] < best_val:
+        if val_metrics["val/mlm_loss"] < (best_val - float(cfg.train.early_stop_min_delta)):
             best_val = val_metrics["val/mlm_loss"]
             best_epoch = epoch
             no_improve_epochs = 0

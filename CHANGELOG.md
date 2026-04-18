@@ -133,3 +133,9 @@
 - Changed: scripts/train_bert.py to use warmup+cosine LR schedule instead of warmup-only linear schedule.
 - Changed: scripts/train_bert.py to add early stopping by validation MLM loss with patience and best-epoch tracking.
 - Changed: configs/train/bert_warmup.yaml to add `min_lr_ratio` and `early_stop_patience` knobs.
+
+## 2026-04-18 — BERT anti-overfitting defaults
+- Changed: configs/train/bert_warmup.yaml to increase regularization (`dropout=0.2`, `weight_decay=1e-3`).
+- Changed: configs/train/bert_warmup.yaml to tighten early stopping (`patience=3`, `min_delta=0.001`).
+- Changed: configs/train/bert_warmup.yaml to add MLM `label_smoothing=0.05`.
+- Changed: scripts/train_bert.py to use smoothed MLM loss for training and plain CE for validation.
