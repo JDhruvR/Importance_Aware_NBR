@@ -128,3 +128,8 @@
 - Changed: scripts/train_bert.py to move CLS sanity-check batches to model device, fixing CPU/GPU mismatch crash after training.
 - Changed: scripts/train_bert.py to print per-epoch train/val metrics, epoch time, elapsed time, and ETA in terminal.
 - Changed: CONTEXT.md with latest status note for run-stability update.
+
+## 2026-04-18 — BERT warmup generalization tuning
+- Changed: scripts/train_bert.py to use warmup+cosine LR schedule instead of warmup-only linear schedule.
+- Changed: scripts/train_bert.py to add early stopping by validation MLM loss with patience and best-epoch tracking.
+- Changed: configs/train/bert_warmup.yaml to add `min_lr_ratio` and `early_stop_patience` knobs.

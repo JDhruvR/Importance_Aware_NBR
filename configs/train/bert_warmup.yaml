@@ -3,6 +3,7 @@ lr: 1.0e-3
 batch_size: 256
 epochs: 10
 warmup_steps: 1000
+min_lr_ratio: 0.05
 weight_decay: 1.0e-4
 dropout: 0.1
 num_workers: 4
@@ -26,3 +27,5 @@ word2vec_path: null
 
 run_sanity_checks: true
 sanity_max_baskets: 2000
+
+early_stop_patience: 5

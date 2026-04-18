@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from time import perf_counter
 
@@ -76,6 +77,28 @@ def _run_eval(model: BasketBERT, loader: DataLoader, device: torch.device) -> di
         "val/masked_acc": mean_acc,
         "val/perplexity": float(min(1e6, torch.exp(torch.tensor(mean_loss)).item())),
     }
+
+
+def _build_warmup_cosine_scheduler(
+    optimizer: torch.optim.Optimizer,
+    total_steps: int,
+    warmup_steps: int,
+    min_lr_ratio: float,
+) -> torch.optim.lr_scheduler.LambdaLR:
+    if total_steps <= 0:
+        raise ValueError("total_steps must be positive")
+    warmup_steps = max(1, warmup_steps)
+
+    def lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            return 0.1 + 0.9 * (step / warmup_steps)
+
+        remain = max(1, total_steps - warmup_steps)
+        progress = min(1.0, (step - warmup_steps) / remain)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 
 def _compute_item_neighbor_drift(model: BasketBERT, sample_items: int = 256) -> dict[str, float]:
@@ -219,10 +242,12 @@ def main(cfg: DictConfig) -> None:
         lr=float(cfg.train.lr),
         weight_decay=float(cfg.train.weight_decay),
     )
-    scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer,
-        start_factor=0.1,
-        total_iters=max(1, int(cfg.train.warmup_steps)),
+    total_steps = int(cfg.train.epochs) * max(1, len(train_loader))
+    scheduler = _build_warmup_cosine_scheduler(
+        optimizer=optimizer,
+        total_steps=total_steps,
+        warmup_steps=int(cfg.train.warmup_steps),
+        min_lr_ratio=float(cfg.train.min_lr_ratio),
     )
 
     run_name = (
@@ -244,8 +269,10 @@ def main(cfg: DictConfig) -> None:
     best_ckpt = output_dir / "bert_best.pt"
     last_ckpt = output_dir / "bert_last.pt"
     best_val = float("inf")
+    best_epoch = 0
     global_step = 0
     start_time = perf_counter()
+    no_improve_epochs = 0
 
     print(
         f"[bert] start dataset={Path(str(cfg.data.processed_dir)).name} "
@@ -338,6 +365,8 @@ def main(cfg: DictConfig) -> None:
 
         if val_metrics["val/mlm_loss"] < best_val:
             best_val = val_metrics["val/mlm_loss"]
+            best_epoch = epoch
+            no_improve_epochs = 0
             torch.save(
                 {
                     "epoch": epoch,
@@ -350,6 +379,19 @@ def main(cfg: DictConfig) -> None:
                 },
                 best_ckpt,
             )
+        else:
+            no_improve_epochs += 1
+
+        if int(cfg.train.early_stop_patience) > 0:
+            if no_improve_epochs >= int(cfg.train.early_stop_patience):
+                print(
+                    "[bert] "
+                    f"early_stop epoch={epoch} "
+                    f"best_epoch={best_epoch} best_val={best_val:.4f} "
+                    f"patience={int(cfg.train.early_stop_patience)}",
+                    flush=True,
+                )
+                break
 
     dataset_name = Path(str(cfg.data.processed_dir)).name
     best_bundle = _save_encoder_bundle(model, output_dir, dataset_name)
@@ -378,6 +420,7 @@ def main(cfg: DictConfig) -> None:
     run.summary["best_checkpoint"] = str(best_ckpt)
     run.summary["last_checkpoint"] = str(last_ckpt)
     run.summary["best_val_mlm_loss"] = best_val
+    run.summary["best_epoch"] = best_epoch
     run.summary["output_dir"] = str(output_dir)
     run.finish()
 
