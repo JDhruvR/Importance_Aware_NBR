@@ -404,6 +404,10 @@ def main(cfg: DictConfig) -> None:
                 )
                 break
 
+    if best_ckpt.exists():
+        best_state = torch.load(best_ckpt, map_location=device)
+        model.load_state_dict(best_state["model_state_dict"])
+
     dataset_name = Path(str(cfg.data.processed_dir)).name
     best_bundle = _save_encoder_bundle(model, output_dir, dataset_name)
 
@@ -432,6 +436,7 @@ def main(cfg: DictConfig) -> None:
     run.summary["last_checkpoint"] = str(last_ckpt)
     run.summary["best_val_mlm_loss"] = best_val
     run.summary["best_epoch"] = best_epoch
+    run.summary["exported_encoder_epoch"] = best_epoch
     run.summary["output_dir"] = str(output_dir)
     run.finish()
 
