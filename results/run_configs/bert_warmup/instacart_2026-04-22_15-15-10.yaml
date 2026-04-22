@@ -1,0 +1,109 @@
+_wandb:
+    value:
+        cli_version: 0.24.1
+        e:
+            xc5j0rryali4m2b388i8qr4qrwdkvjtx:
+                args:
+                    - data=instacart
+                    - train.run_name=bert-warmup-instacart-full-v4-probe-aligned
+                codePath: scripts/train_bert.py
+                codePathLocal: scripts/train_bert.py
+                cpu_count: 16
+                cpu_count_logical: 32
+                cudaVersion: "12.2"
+                disk:
+                    /:
+                        total: "982820896768"
+                        used: "925470932992"
+                email: dhrramjos@gmail.com
+                executable: /home/dhruv/miniforge3/envs/lerobot/bin/python
+                git:
+                    commit: aaa9db0effbfe20104edfbe984cf4f9c9ff19b3c
+                    remote: git@github.com:JDhruvR/Importance_Aware_NBR.git
+                gpu: NVIDIA GeForce RTX 3090 Ti
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10752
+                      memoryTotal: "25757220864"
+                      name: NVIDIA GeForce RTX 3090 Ti
+                      uuid: GPU-66765c37-9d03-7849-41e7-852c84665c68
+                host: iiitb-X570-AORUS-ELITE-WIFI
+                memory:
+                    total: "33565577216"
+                os: Linux-6.8.0-101-generic-x86_64-with-glibc2.35
+                program: /home/dhruv/Scene-Graph-VLA/sandbox/Importance_Aware_NBR/scripts/train_bert.py
+                python: CPython 3.10.19
+                root: outputs/2026-04-22/15-15-10
+                startedAt: "2026-04-22T09:45:28.126858Z"
+                writerId: xc5j0rryali4m2b388i8qr4qrwdkvjtx
+        m: []
+        python_version: 3.10.19
+        t:
+            "1":
+                - 1
+                - 50
+            "2":
+                - 1
+                - 50
+            "3":
+                - 2
+                - 13
+                - 16
+                - 61
+                - 62
+            "4": 3.10.19
+            "5": 0.24.1
+            "12": 0.24.1
+            "13": linux-x86_64
+data:
+    value:
+        data_dir: data/raw/instacart
+        min_baskets_per_user: 3
+        min_item_freq: 5
+        processed_dir: data/processed/instacart
+device:
+    value: auto
+model:
+    value:
+        D: 128
+        L1: 2
+        item_id_offset: 2
+        mask_token_id: 1
+        model_type: bert
+        num_heads: 4
+        pad_token_id: 0
+output_dir:
+    value: outputs/2026-04-22/15-15-10
+seed:
+    value: 42
+train:
+    value:
+        accumulate_grad_batches: 1
+        batch_size: 128
+        dropout: 0.22
+        early_stop_min_delta: 0.0005
+        early_stop_patience: 4
+        epochs: 24
+        grad_clip: 1
+        label_smoothing: 0.03
+        log_every_n_steps: 50
+        lr: 0.0012
+        mask_prob: 0.15
+        max_items_per_basket: null
+        max_train_baskets: null
+        max_val_baskets: null
+        min_lr_ratio: 0.02
+        monitor_metric: val/mlm_loss
+        monitor_mode: min
+        num_workers: 8
+        run_name: bert-warmup-instacart-full-v4-probe-aligned
+        run_sanity_checks: true
+        sanity_max_baskets: 2000
+        save_top_k: 1
+        use_word2vec_init: true
+        val_mask_prob: 0.15
+        wandb_project: importance-aware-nbr
+        warmup_steps: 1000
+        weight_decay: 0.004
+        word2vec_path: null

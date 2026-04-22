@@ -145,6 +145,8 @@
 - Deleted: configs/config_dunnhumby.yaml (W&B run snapshot misplaced under Hydra config root).
 - Added: results/run_configs/bert_warmup/tafeng_2026-04-20_00-12-59.yaml to archive TaFeng run snapshot in results area.
 - Added: results/run_configs/bert_warmup/dunnhumby_2026-04-20_00-56-51.yaml to archive Dunnhumby run snapshot in results area.
+- Deleted: configs/config_instacart.yaml (W&B run snapshot misplaced under Hydra config root).
+- Added: results/run_configs/bert_warmup/instacart_2026-04-22_15-15-10.yaml to archive Instacart run snapshot in results area.
 - Changed: results/bert_warmup.md with canonical location for saved run config snapshots.
 - Changed: INSTRUCTIONS.md to document that run snapshots belong in `results/run_configs/` and not `configs/`.
 - Changed: CONTEXT.md and results/bert_warmup.md to document that `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt` are also copied into `data/processed/<dataset>/` on the training machine after runs.

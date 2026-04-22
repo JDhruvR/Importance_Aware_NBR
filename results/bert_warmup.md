@@ -37,6 +37,7 @@ W&B-exported run config snapshots are stored under `results/run_configs/bert_war
 
 - `results/run_configs/bert_warmup/tafeng_2026-04-20_00-12-59.yaml`
 - `results/run_configs/bert_warmup/dunnhumby_2026-04-20_00-56-51.yaml`
+- `results/run_configs/bert_warmup/instacart_2026-04-22_15-15-10.yaml`
 
 Operational note:
 - After full runs, keep a copy of `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt` under `data/processed/<dataset>/` on the training machine for quick downstream handoff.
