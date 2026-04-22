@@ -1,11 +1,11 @@
 # BERT MLM warmup config
-lr: 8.0e-4
-batch_size: 128
-epochs: 30
-warmup_steps: 400
+lr: 1.2e-3
+batch_size: 256
+epochs: 24
+warmup_steps: 1000
 min_lr_ratio: 0.02
-weight_decay: 5.0e-3
-dropout: 0.25
+weight_decay: 4.0e-3
+dropout: 0.22
 num_workers: 8
 grad_clip: 1.0
 accumulate_grad_batches: 1
@@ -28,6 +28,6 @@ word2vec_path: null
 run_sanity_checks: true
 sanity_max_baskets: 2000
 
-early_stop_patience: 6
+early_stop_patience: 4
 early_stop_min_delta: 0.0005
-label_smoothing: 0.05
+label_smoothing: 0.03
