@@ -1,9 +1,16 @@
 # Context
 
 ## Current State
-Phase 3 — Training scaffolding started. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1-T1.5), and Phase 2 model components (T2.1-T2.4 embeddings, encoder, GPT, vanilla model) are done. Data preprocessing was run on all three datasets with the currently available files. Frequency baselines and evaluation script are implemented; full-dataset metrics and GPTopFreq alpha sweeps are logged in `results/baseline_eval.md` (subset runs retained for reference). Training scripts and Lightning modules are now scaffolded; no training runs executed yet.
+Phase 3 baseline work remains focused on plain BERT warmup only. Word2Vec embeddings exist for all datasets in `data/processed/{dataset}/word2vec_dim128.kv`. Plain PyTorch BERT warmup pipeline is in place with Hydra + W&B, checkpointing, sanity checks, warmup+cosine schedule, and early stopping. PyTorch Lightning is removed for this BERT path and disallowed for new training loops.
+
+Current default BERT warmup training config in `configs/train/bert_warmup.yaml` is tuned from recent Instacart probe behavior for faster but stable convergence:
+- `lr=1.2e-3`, `batch_size=256`, `epochs=24`, `warmup_steps=1000`, `min_lr_ratio=0.02`
+- `weight_decay=4e-3`, `dropout=0.22`, `label_smoothing=0.03`, `early_stop_patience=4`
+
+Config hygiene update completed: W&B-exported run snapshot YAMLs are now archived under `results/run_configs/bert_warmup/` and removed from `configs/` to avoid mixing experiment artifacts with Hydra config groups.
 
 ## Completed Tasks
+
 **Phase 0 — Repo Bootstrap:**
 - T0.1: uv init, pyproject.toml, Makefile
 - T0.2: nbr/utils/seed.py with seed_everything()
@@ -14,55 +21,85 @@ Phase 3 — Training scaffolding started. All Phase 0 (T0.1-T0.4), Phase 1 (T1.1
 - T1.1: scripts/download_data.py with instructions for Instacart, Dunnhumby, TaFeng
 - T1.2: scripts/preprocess.py — Instacart preprocessor
 - T1.3: scripts/preprocess.py — Dunnhumby and TaFeng preprocessors (shared _preprocess_basket_df helper)
-- T1.4: nbr/data/split.py — split_user_baskets() with last=val, second-to-last=test, rest=train
+- T1.4: nbr/data/split.py — split_user_baskets() with last=test, second-to-last=val, rest=train
 - T1.5: nbr/data/dataset.py — BasketSequenceDataset and BasketCollator
 
 **Phase 2 — Baselines (Model Components):**
 - T2.1: nbr/models/embeddings.py — ItemEmbedding + Word2VecTrainer
 - T2.2: nbr/models/encoder.py — IntraBasketEncoder with CLS token, TransformerEncoderLayer
 - T2.3: nbr/models/gpt.py — RoPEAttention + CausalBasketGPT (causality verified)
-- T2.4: nbr/models/vanilla.py — VanillaNBR (embeddings -> encoder mean-pool -> GPT -> dot-product logits)
-- T2.6: added — bert_gpt vanilla model (CLS basket repr + GPT + dot-product logits)
-
-**Phase 2 — Baselines (Frequency):**
-- T2.5: started — nbr/baselines/frequency.py and scripts/evaluate_baselines.py created (evaluation needs runtime tuning)
+- T2.4: nbr/models/vanilla.py — VanillaNBR
+- T2.6: bert_gpt vanilla model scaffold exists in `nbr/models/bert_gpt/model.py`
 
 **Phase 2.5 — Pre-training:**
-- T2.7: Added `scripts/train_word2vec.py` to generate pre-trained item embeddings from basket data.
-- T2.8: Completed Word2Vec pre-training for all datasets. Embeddings are stored as `word2vec_dim128.kv` files, ready for model initialization.
+- T2.7: scripts/train_word2vec.py implemented
+- T2.8: Word2Vec pre-training completed for Instacart/TaFeng/Dunnhumby (`word2vec_dim128.kv` present)
 
-**Results:**
-- results/baseline_eval.md — 2k-user subset metrics for Instacart, TaFeng, Dunnhumby (full runs pending)
+**Phase 3 — Plain BERT Warmup (new):**
+- Added `nbr/data/basket_mlm_dataset.py`: basket-level MLM dataset/collator (each basket = sentence)
+- Added `nbr/models/bert.py`: BasketBERT model (item embedding + IntraBasketEncoder + tied MLM head)
+- Added `nbr/train/bert_data_module.py`: lightweight dataloader builder (plain PyTorch)
+- Added `scripts/train_bert.py`: Hydra entrypoint with plain PyTorch train/val loops, W&B logging, checkpointing, sanity checks, encoder bundle export
+- Added configs: `configs/model/bert.yaml`, `configs/train/bert_warmup.yaml`, `configs/bert_warmup.yaml`
+- Removed `nbr/train/bert_lightning.py` (no-Lightning policy)
+- Added `results/bert_warmup.md` with smoke-run outputs and metrics
+
+## Latest Run Snapshot
+Dataset: Instacart probe (4 epochs)
+
+Command:
+`PYTHONPATH=. python scripts/train_bert.py data=instacart train.run_name=bert-warmup-instacart-bs256-lr12e4-e4-probe train.batch_size=128 train.num_workers=4 train.epochs=4 train.lr=1.2e-3 train.warmup_steps=200 train.min_lr_ratio=0.05 train.weight_decay=4.0e-3 train.dropout=0.22 train.label_smoothing=0.04 train.mask_prob=0.15 train.val_mask_prob=0.15 train.early_stop_patience=0 train.log_every_n_steps=20`
+
+Observed epoch logs (key trend):
+- epoch1: train_loss 7.4764, val_loss 7.1151, train_acc 0.1102, val_acc 0.1171
+- epoch2: train_loss 7.2315, val_loss 6.9810, train_acc 0.1191, val_acc 0.1206
+- epoch3: train_loss 7.1355, val_loss 6.9196, train_acc 0.1217, val_acc 0.1229
+- epoch4: train_loss 7.0734, val_loss 6.8816, train_acc 0.1235, val_acc 0.1230
+
+Diagnosis from probe:
+- stable optimization with no overfitting signal in first 4 epochs
+- tiny train/val gap, so previous stronger regularization looked somewhat underfitting
+- very long epoch wall-clock on large datasets is expected; not a model stall
+
+Recent full-run snapshots archived:
+- `results/run_configs/bert_warmup/tafeng_2026-04-20_00-12-59.yaml`
+- `results/run_configs/bert_warmup/dunnhumby_2026-04-20_00-56-51.yaml`
+
+W&B run URLs and local output dirs are still discoverable in those snapshot files.
+
+Artifacts from full runs remain under `outputs/<date>/<time>/` with:
+- `bert_best.pt`
+- `bert_last.pt`
+- `bert_encoder_bundle_<dataset>.pt`
+- `bert_sanity_checks.txt`
+
+For downstream collaborator convenience, `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt`
+are also being placed under `data/processed/<dataset>/` on the training machine after runs.
 
 ## Next Task
-T3 — Implement training loops for vanilla/dual-stream/full and add experiment configs; start training runs when requested.
+T3.1 — Run full plain BERT warmup for all datasets with realistic epochs (K) and log results:
+- `data=tafeng`
+- `data=instacart`
+- `data=dunnhumby`
+
+Then hand off saved encoder bundle checkpoints to GPT collaborator.
 
 ## Decisions Made
-- Paper: "Not All Items Are Created Equal: Importance-Aware Next Basket Recommendation"
-- Three datasets: Instacart, Dunnhumby, TaFeng
-- Three model tiers: vanilla → dual_stream → full
-- CPU-only PyTorch installed (torch 2.11.0+cpu)
-- Training loops should favor modular scripts with heavy W&B logging; PyTorch Lightning is allowed/preferred when it reduces boilerplate
-- Hyperparameter tuning should use W&B Sweeps first; add other optimizers (e.g., Optuna) only if needed
-- All preprocessing logic in single scripts/preprocess.py with shared helper
-- BasketSequenceDataset: one sample per user, target = last basket, input = up to max_seq_len historical baskets
-- ItemEmbedding.weight accessed via self.item_embedding.embedding.weight
-- TaFeng file name is `ta_feng_all_months_merged.csv`
-- Dunnhumby sample uses `transactions_*.csv` with columns CUST_CODE, BASKET_ID, SHOP_DATE, PROD_CODE
-- Baseline evaluation uses basket-level histories from train split; test targets are last basket per user
-- Baseline results are tracked in `results/` with command provenance
-- Collaborators must update CHANGELOG/CONTEXT/INSTRUCTIONS before pushing
-- Dataset schema and stats are documented in data/dataset_description.md
-- Metadata tables (items/basket_meta/basket_items/user_meta) are now emitted during preprocessing
-- Processed data will be distributed via a zip; raw data not required once processed is available
+- Current scope restricted to plain BERT warmup baseline only.
+- BERT uses basket-as-sentence setup: item tokens per basket, CLS output as basket representation.
+- Word2Vec initialization is required for item embeddings when `.kv` exists.
+- Training and tracking requirements: Hydra + plain PyTorch loops + W&B.
+- New decision: do not use PyTorch Lightning for new training loops in this repo.
+- Keep code simple, modular, and notebook-portable for possible Kaggle execution.
 
 ## Broken / Incomplete
-- Dual-stream/full models are stubbed with vanilla backbone; importance losses still need real implementation
-- Need to create experiments/ directory and write experiment configs
-- Need to create tests/ directory and write unit tests
+- Old Lightning-based scripts still exist (`scripts/train_vanilla.py`, `scripts/train_importance.py`) and are not yet migrated.
+- BERT warmup full runs for all datasets pending.
+- Unit tests for new BERT warmup modules not yet added.
 
 ## Best Val Metrics
-None yet.
+- Plain BERT warmup (TaFeng smoke subset): val_mlm_loss 9.53411
+- Recent Instacart 4-epoch probe improved steadily to val_mlm_loss 6.8816 at epoch 4 (probe only, not final full run metric).
 
-## Baseline Metrics (full datasets)
-- Logged full-dataset frequency baseline metrics and GPTopFreq alpha sweeps in results/baseline_eval.md
+## Baseline Metrics (frequency)
+- Full-dataset frequency baseline metrics and GPTopFreq alpha sweeps logged in `results/baseline_eval.md`

@@ -112,3 +112,41 @@
 - Changed: The script dynamically sets the window size to the max basket length per dataset.
 - Done: Trained embeddings for all 3 datasets and saved as `.kv` files in `data/processed/{dataset}/`.
 - Added: `scripts/check_embeddings.py` to validate trained Word2Vec embeddings by finding similar items.
+
+## 2026-04-18 — Plain PyTorch BERT warmup pipeline
+- Added: nbr/data/basket_mlm_dataset.py with basket-level MLM dataset/collator for plain BERT warmup.
+- Added: nbr/models/bert.py with BasketBERT model, MLM head, and Word2Vec initialization.
+- Added: nbr/train/bert_data_module.py as lightweight dataloader builder (no Lightning dependency).
+- Added: scripts/train_bert.py with plain PyTorch training loop, W&B logging, checkpointing, and sanity checks.
+- Added: configs/model/bert.yaml, configs/train/bert_warmup.yaml, configs/bert_warmup.yaml for BERT warmup runs.
+- Deleted: nbr/train/bert_lightning.py to enforce no-Lightning policy for new BERT training.
+- Changed: INSTRUCTIONS.md to require plain PyTorch loops and add BERT warmup command.
+- Added: results/bert_warmup.md with smoke-run command, W&B link, and sanity metrics.
+- Changed: CONTEXT.md snapshot to reflect plain BERT warmup implementation and no-Lightning decision.
+
+## 2026-04-18 — BERT run stability and terminal progress
+- Changed: scripts/train_bert.py to move CLS sanity-check batches to model device, fixing CPU/GPU mismatch crash after training.
+- Changed: scripts/train_bert.py to print per-epoch train/val metrics, epoch time, elapsed time, and ETA in terminal.
+- Changed: CONTEXT.md with latest status note for run-stability update.
+
+## 2026-04-18 — BERT warmup generalization tuning
+- Changed: scripts/train_bert.py to use warmup+cosine LR schedule instead of warmup-only linear schedule.
+- Changed: scripts/train_bert.py to add early stopping by validation MLM loss with patience and best-epoch tracking.
+- Changed: configs/train/bert_warmup.yaml to add `min_lr_ratio` and `early_stop_patience` knobs.
+
+## 2026-04-18 — BERT anti-overfitting defaults
+- Changed: configs/train/bert_warmup.yaml to increase regularization (`dropout=0.2`, `weight_decay=1e-3`).
+- Changed: configs/train/bert_warmup.yaml to tighten early stopping (`patience=3`, `min_delta=0.001`).
+- Changed: configs/train/bert_warmup.yaml to add MLM `label_smoothing=0.05`.
+- Changed: scripts/train_bert.py to use smoothed MLM loss for training and plain CE for validation.
+
+## 2026-04-22 — Move run snapshots out of Hydra configs
+- Deleted: configs/config_tafeng.yaml (W&B run snapshot misplaced under Hydra config root).
+- Deleted: configs/config_dunnhumby.yaml (W&B run snapshot misplaced under Hydra config root).
+- Added: results/run_configs/bert_warmup/tafeng_2026-04-20_00-12-59.yaml to archive TaFeng run snapshot in results area.
+- Added: results/run_configs/bert_warmup/dunnhumby_2026-04-20_00-56-51.yaml to archive Dunnhumby run snapshot in results area.
+- Deleted: configs/config_instacart.yaml (W&B run snapshot misplaced under Hydra config root).
+- Added: results/run_configs/bert_warmup/instacart_2026-04-22_15-15-10.yaml to archive Instacart run snapshot in results area.
+- Changed: results/bert_warmup.md with canonical location for saved run config snapshots.
+- Changed: INSTRUCTIONS.md to document that run snapshots belong in `results/run_configs/` and not `configs/`.
+- Changed: CONTEXT.md and results/bert_warmup.md to document that `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt` are also copied into `data/processed/<dataset>/` on the training machine after runs.

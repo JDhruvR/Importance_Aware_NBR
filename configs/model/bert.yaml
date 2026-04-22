@@ -1,0 +1,8 @@
+# Plain basket-BERT model config
+model_type: bert
+D: 128
+L1: 2
+num_heads: 4
+pad_token_id: 0
+mask_token_id: 1
+item_id_offset: 2
