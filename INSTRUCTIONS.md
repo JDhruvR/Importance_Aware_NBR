@@ -13,6 +13,7 @@ independently evaluable so ablations come for free.
 
 - **Always track:** code files (.py), configs (.yaml, .toml), docs (.md, .tex), Makefile, .gitignore
 - **Never track:** raw data, processed data (.parquet, .csv, .json), checkpoints (.pt, .pth), logs, outputs/, wandb/, caches (__pycache__, .ruff_cache, .venv), uv.lock
+- **Run config snapshots:** W&B-exported config snapshots must not be stored in `configs/`; keep them under `results/run_configs/<task>/`.
 - **Tests:** keep major/structural test files in `tests/` and track them. Delete temporary/scratch test files after use.
 - **Living docs:** CHANGELOG.md, CONTEXT.md, INSTRUCTIONS.md are tracked and updated every session.
 - **When in doubt:** ask before adding something to .gitignore or committing.

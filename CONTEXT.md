@@ -1,7 +1,13 @@
 # Context
 
 ## Current State
-Phase 3 baseline work now focused on plain BERT warmup only. Word2Vec embeddings already exist for all datasets in `data/processed/{dataset}/word2vec_dim128.kv`. New plain PyTorch BERT warmup pipeline is implemented and smoke-tested on TaFeng with W&B logging. PyTorch Lightning is explicitly removed for this BERT path and disallowed for new training loops by project instruction. Latest updates fix post-training sanity check device mismatch on GPU runs, add clear per-epoch terminal timing/ETA prints, introduce warmup+cosine LR with early stopping, and add stronger anti-overfitting defaults (higher dropout/weight decay + label smoothing).
+Phase 3 baseline work remains focused on plain BERT warmup only. Word2Vec embeddings exist for all datasets in `data/processed/{dataset}/word2vec_dim128.kv`. Plain PyTorch BERT warmup pipeline is in place with Hydra + W&B, checkpointing, sanity checks, warmup+cosine schedule, and early stopping. PyTorch Lightning is removed for this BERT path and disallowed for new training loops.
+
+Current default BERT warmup training config in `configs/train/bert_warmup.yaml` is tuned from recent Instacart probe behavior for faster but stable convergence:
+- `lr=1.2e-3`, `batch_size=256`, `epochs=24`, `warmup_steps=1000`, `min_lr_ratio=0.02`
+- `weight_decay=4e-3`, `dropout=0.22`, `label_smoothing=0.03`, `early_stop_patience=4`
+
+Config hygiene update completed: W&B-exported run snapshot YAMLs are now archived under `results/run_configs/bert_warmup/` and removed from `configs/` to avoid mixing experiment artifacts with Hydra config groups.
 
 ## Completed Tasks
 
@@ -39,30 +45,36 @@ Phase 3 baseline work now focused on plain BERT warmup only. Word2Vec embeddings
 - Added `results/bert_warmup.md` with smoke-run outputs and metrics
 
 ## Latest Run Snapshot
-Dataset: TaFeng smoke subset
+Dataset: Instacart probe (4 epochs)
 
 Command:
-`PYTHONPATH=. uv run python scripts/train_bert.py data=tafeng train.epochs=1 train.batch_size=64 train.num_workers=0 train.max_train_baskets=1500 train.max_val_baskets=300 train.log_every_n_steps=20 train.run_name=bert-warmup-tafeng-smoke-pt`
+`PYTHONPATH=. python scripts/train_bert.py data=instacart train.run_name=bert-warmup-instacart-bs256-lr12e4-e4-probe train.batch_size=128 train.num_workers=4 train.epochs=4 train.lr=1.2e-3 train.warmup_steps=200 train.min_lr_ratio=0.05 train.weight_decay=4.0e-3 train.dropout=0.22 train.label_smoothing=0.04 train.mask_prob=0.15 train.val_mask_prob=0.15 train.early_stop_patience=0 train.log_every_n_steps=20`
 
-W&B run:
-- https://wandb.ai/kronpoz/importance-aware-nbr/runs/l2jd5bm4
+Observed epoch logs (key trend):
+- epoch1: train_loss 7.4764, val_loss 7.1151, train_acc 0.1102, val_acc 0.1171
+- epoch2: train_loss 7.2315, val_loss 6.9810, train_acc 0.1191, val_acc 0.1206
+- epoch3: train_loss 7.1355, val_loss 6.9196, train_acc 0.1217, val_acc 0.1229
+- epoch4: train_loss 7.0734, val_loss 6.8816, train_acc 0.1235, val_acc 0.1230
 
-Output dir:
-- `outputs/2026-04-18/01-33-18`
+Diagnosis from probe:
+- stable optimization with no overfitting signal in first 4 epochs
+- tiny train/val gap, so previous stronger regularization looked somewhat underfitting
+- very long epoch wall-clock on large datasets is expected; not a model stall
 
-Artifacts:
-- `outputs/2026-04-18/01-33-18/bert_best.pt`
-- `outputs/2026-04-18/01-33-18/bert_last.pt`
-- `outputs/2026-04-18/01-33-18/bert_encoder_bundle_tafeng.pt`
-- `outputs/2026-04-18/01-33-18/bert_sanity_checks.txt`
+Recent full-run snapshots archived:
+- `results/run_configs/bert_warmup/tafeng_2026-04-20_00-12-59.yaml`
+- `results/run_configs/bert_warmup/dunnhumby_2026-04-20_00-56-51.yaml`
 
-Metrics:
-- best_val_mlm_loss: 9.53411
-- word2vec_loaded: 15743
-- word2vec_missing: 0
-- adjacent_cos: 0.965391
-- random_cos: 0.961813
-- adj_minus_rand: 0.003578
+W&B run URLs and local output dirs are still discoverable in those snapshot files.
+
+Artifacts from full runs remain under `outputs/<date>/<time>/` with:
+- `bert_best.pt`
+- `bert_last.pt`
+- `bert_encoder_bundle_<dataset>.pt`
+- `bert_sanity_checks.txt`
+
+For downstream collaborator convenience, `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt`
+are also being placed under `data/processed/<dataset>/` on the training machine after runs.
 
 ## Next Task
 T3.1 — Run full plain BERT warmup for all datasets with realistic epochs (K) and log results:
@@ -87,6 +99,7 @@ Then hand off saved encoder bundle checkpoints to GPT collaborator.
 
 ## Best Val Metrics
 - Plain BERT warmup (TaFeng smoke subset): val_mlm_loss 9.53411
+- Recent Instacart 4-epoch probe improved steadily to val_mlm_loss 6.8816 at epoch 4 (probe only, not final full run metric).
 
 ## Baseline Metrics (frequency)
 - Full-dataset frequency baseline metrics and GPTopFreq alpha sweeps logged in `results/baseline_eval.md`
