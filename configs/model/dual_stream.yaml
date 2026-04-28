@@ -1,0 +1,11 @@
+# Dual-stream NBR model config
+model_type: dual_stream
+D: 128
+L1: 2
+L2: 2
+dk: 64
+K1: 4
+K2: 4
+num_heads: 4
+use_importance_head: true
+use_dual_stream_fusion: true
