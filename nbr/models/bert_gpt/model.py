@@ -114,15 +114,14 @@ class BertGptNBR(nn.Module):
 
         Args:
             logits: (B, T, V) — predicted logits.
-            target: (B, V) — multi-hot ground truth for the target basket.
+            target: (B, T, V) — multi-hot ground truth sequence.
             basket_mask: (B, T) bool — True for real baskets.
 
         Returns:
             Scalar loss averaged over real baskets.
         """
-        target_expanded = target.unsqueeze(1).expand_as(logits)  # (B, T, V)
         per_element_loss = F.binary_cross_entropy_with_logits(
-            logits, target_expanded, reduction="none"
+            logits, target, reduction="none"
         )  # (B, T, V)
 
         mask = basket_mask.unsqueeze(-1).float()  # (B, T, 1)

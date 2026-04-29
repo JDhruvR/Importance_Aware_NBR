@@ -41,6 +41,7 @@ class VanillaNBR(nn.Module):
         self.dim = dim
 
         self.item_embedding = ItemEmbedding(vocab_size, dim, padding_idx=0)
+        self.output_bias = nn.Parameter(torch.zeros(vocab_size))
         self.encoder = IntraBasketEncoder(dim, num_heads, encoder_layers, dropout)
         self.gpt = CausalBasketGPT(dim, num_heads, gpt_layers, dropout)
 
@@ -86,7 +87,9 @@ class VanillaNBR(nn.Module):
 
         # Dot product against item embedding weights: (B, T, D) @ (V, D).T -> (B, T, V)
         logits = next_pred @ self.item_embedding.embedding.weight.T  # (B, T, V)
-
+        if hasattr(self, "output_bias"):
+            logits = logits + self.output_bias
+            
         return logits
 
     def loss(
@@ -115,6 +118,5 @@ class VanillaNBR(nn.Module):
         mask = basket_mask.unsqueeze(-1).float()  # (B, T, 1)
         masked_loss = per_element_loss * mask  # (B, T, V)
 
-        # Average over all non-masked elements (B*T*V)
-        # Standard BCE usually averages over the entire output dimension V
-        return masked_loss.sum() / (mask.sum() * self.vocab_size).clamp(min=1.0)
+        # Sum over vocabulary (V), average over baskets
+        return masked_loss.sum() / mask.sum().clamp(min=1.0)

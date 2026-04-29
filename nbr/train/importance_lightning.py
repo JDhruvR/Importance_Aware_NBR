@@ -87,8 +87,12 @@ class ImportanceLitModule(LightningModule):
         primary_loss = self._primary_loss(logits, batch)
         self._combine_losses(primary_loss, aux_losses, prefix)
 
-        last_logits = logits[:, -1]
-        target = batch["target"]
+        batch_size = logits.size(0)
+        last_idx = batch["basket_mask"].sum(dim=1).long() - 1
+        batch_indices = torch.arange(batch_size, device=logits.device)
+
+        last_logits = logits[batch_indices, last_idx]
+        target = batch["target"][batch_indices, last_idx]
         history = build_history_multihot(batch["items"], batch["item_mask"], target.shape[-1])
 
         for k in self.hparams.k_values:

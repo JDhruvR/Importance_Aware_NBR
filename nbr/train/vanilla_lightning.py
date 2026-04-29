@@ -90,9 +90,13 @@ class VanillaLitModule(LightningModule):
         logits = self.forward(batch)
         loss = self.model.loss(logits, batch["target"], batch["basket_mask"])
 
-        last_logits = logits[:, -1]
-        # For metrics, we only care about predicting the LAST basket in the sequence
-        target = batch["target"][:, -1]
+        batch_size = logits.size(0)
+        last_idx = batch["basket_mask"].sum(dim=1).long() - 1
+        batch_indices = torch.arange(batch_size, device=logits.device)
+
+        last_logits = logits[batch_indices, last_idx]
+        # For metrics, we only care about predicting the LAST valid basket in the sequence
+        target = batch["target"][batch_indices, last_idx]
         history = build_history_multihot(batch["items"], batch["item_mask"], target.shape[-1])
 
         for k in self.hparams.k_values:
@@ -121,10 +125,20 @@ class VanillaLitModule(LightningModule):
             self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay
         )
 
-        scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer,
-            start_factor=0.1,
-            total_iters=max(1, int(self.hparams.warmup_steps)),
+        warmup_steps = int(self.hparams.warmup_steps)
+        if self.trainer.estimated_stepping_batches > 0:
+            total_steps = self.trainer.estimated_stepping_batches
+        else:
+            total_steps = max(warmup_steps + 1, int(self.hparams.max_epochs * 55))
+
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.1, total_iters=warmup_steps
+        )
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, total_steps - warmup_steps)
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
         )
 
         return {

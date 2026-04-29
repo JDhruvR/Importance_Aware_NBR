@@ -1,5 +1,5 @@
 defaults:
-  - data: instacart
+  - data: tafeng
   - model: vanilla
   - train: default
   - _self_
