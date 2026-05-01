@@ -1,8 +1,7 @@
 # Context
 
 ## Current State
-Phase 3 baseline work remains focused on plain BERT warmup only. Word2Vec embeddings exist for all datasets in `data/processed/{dataset}/word2vec_dim128.kv`. Plain PyTorch BERT warmup pipeline is in place with Hydra + W&B, checkpointing, sanity checks, warmup+cosine schedule, and early stopping. PyTorch Lightning is removed for this BERT path and disallowed for new training loops.
-
+Phase 3 geometric importance score computation script (T3.1) is now implemented. The script (`scripts/compute_importance.py`) supports efficiently batching over large datasets to compute $\overline{\Delta}$, the IDF factor, and $\alpha_{idf}$. Plain BERT warmup is also fully set up.
 Current default BERT warmup training config in `configs/train/bert_warmup.yaml` is tuned from recent Instacart probe behavior for faster but stable convergence:
 - `lr=1.2e-3`, `batch_size=256`, `epochs=24`, `warmup_steps=1000`, `min_lr_ratio=0.02`
 - `weight_decay=4e-3`, `dropout=0.22`, `label_smoothing=0.03`, `early_stop_patience=4`
@@ -35,7 +34,7 @@ Config hygiene update completed: W&B-exported run snapshot YAMLs are now archive
 - T2.7: scripts/train_word2vec.py implemented
 - T2.8: Word2Vec pre-training completed for Instacart/TaFeng/Dunnhumby (`word2vec_dim128.kv` present)
 
-**Phase 3 — Plain BERT Warmup (new):**
+**Phase 3 — Plain BERT Warmup & Importance (new):**
 - Added `nbr/data/basket_mlm_dataset.py`: basket-level MLM dataset/collator (each basket = sentence)
 - Added `nbr/models/bert.py`: BasketBERT model (item embedding + IntraBasketEncoder + tied MLM head)
 - Added `nbr/train/bert_data_module.py`: lightweight dataloader builder (plain PyTorch)
@@ -43,6 +42,7 @@ Config hygiene update completed: W&B-exported run snapshot YAMLs are now archive
 - Added configs: `configs/model/bert.yaml`, `configs/train/bert_warmup.yaml`, `configs/bert_warmup.yaml`
 - Removed `nbr/train/bert_lightning.py` (no-Lightning policy)
 - Added `results/bert_warmup.md` with smoke-run outputs and metrics
+- T3.1: `scripts/compute_importance.py` implemented to compute `alpha_idf` scores using the pre-trained `IntraBasketEncoder` and batched masking strategy.
 
 ## Latest Run Snapshot
 Dataset: Instacart probe (4 epochs)
@@ -77,13 +77,10 @@ For downstream collaborator convenience, `bert_best.pt` and `bert_encoder_bundle
 are also being placed under `data/processed/<dataset>/` on the training machine after runs.
 
 ## Next Task
-T3.1 — Run full plain BERT warmup for all datasets with realistic epochs (K) and log results:
-- `data=tafeng`
-- `data=instacart`
-- `data=dunnhumby`
-
-Then hand off saved encoder bundle checkpoints to GPT collaborator.
-
+T3.2 — Importance head module
+Create `nbr/models/importance.py` containing:
+- `ImportanceHead(nn.Module)`: A two-layer MLP (`Linear(D, D//2)` → `GELU` → `Linear(D//2, 1)` → `Sigmoid`) mapping item representations `(B*T, S, D)` to importance weights `(B*T, S)` in `[0, 1]`.
+- `importance_init_loss`: An MSE loss function to pre-train the `ImportanceHead` by pushing the predicted weights towards the `alpha_idf` target scores (computed in T3.1), masked to real items only.
 ## Decisions Made
 - Current scope restricted to plain BERT warmup baseline only.
 - BERT uses basket-as-sentence setup: item tokens per basket, CLS output as basket representation.

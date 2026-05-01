@@ -150,3 +150,8 @@
 - Changed: results/bert_warmup.md with canonical location for saved run config snapshots.
 - Changed: INSTRUCTIONS.md to document that run snapshots belong in `results/run_configs/` and not `configs/`.
 - Changed: CONTEXT.md and results/bert_warmup.md to document that `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt` are also copied into `data/processed/<dataset>/` on the training machine after runs.
+
+## 2026-05-01 — Geometric importance score computation
+- Added: scripts/compute_importance.py to compute alpha_idf, raw_importance, and idf_factor.
+- Added: configs/compute_importance.yaml for standalone configuration of importance computation.
+- Done: T3.1 implemented successfully, batched processing over training baskets works with efficient memory footprint.
