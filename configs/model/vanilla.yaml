@@ -1,0 +1,9 @@
+# Vanilla NBR model config
+model_type: vanilla
+D: 128 # embedding / hidden dimension
+L1: 2 # intra-basket encoder layers
+L2: 2 # inter-basket GPT layers
+dk: 64 # intent subspace dimension
+K1: 4 # number of attention heads (intra-basket)
+K2: 4 # number of attention heads (inter-basket)
+num_heads: 4
