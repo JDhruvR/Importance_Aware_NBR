@@ -41,7 +41,6 @@ class VanillaNBR(nn.Module):
         self.dim = dim
 
         self.item_embedding = ItemEmbedding(vocab_size, dim, padding_idx=0)
-        self.output_bias = nn.Parameter(torch.zeros(vocab_size))
         self.encoder = IntraBasketEncoder(dim, num_heads, encoder_layers, dropout)
         self.gpt = CausalBasketGPT(dim, num_heads, gpt_layers, dropout)
 
@@ -87,9 +86,7 @@ class VanillaNBR(nn.Module):
 
         # Dot product against item embedding weights: (B, T, D) @ (V, D).T -> (B, T, V)
         logits = next_pred @ self.item_embedding.embedding.weight.T  # (B, T, V)
-        if hasattr(self, "output_bias"):
-            logits = logits + self.output_bias
-            
+
         return logits
 
     def loss(
@@ -102,21 +99,22 @@ class VanillaNBR(nn.Module):
 
         Args:
             logits: (B, T, V) — predicted logits.
-            target: (B, T, V) — multi-hot ground truth sequence.
+            target: (B, V) — multi-hot ground truth for the target basket.
             basket_mask: (B, T) bool — True for real baskets.
 
         Returns:
-            Scalar loss averaged over real baskets and vocabulary.
+            Scalar loss averaged over real baskets.
         """
+        # Expand target to match logits shape: (B, 1, V) -> broadcast to (B, T, V)
+        target_expanded = target.unsqueeze(1).expand_as(logits)  # (B, T, V)
+
         # Compute BCE per element
-        # reduction="none" so we can mask manually
         per_element_loss = F.binary_cross_entropy_with_logits(
-            logits, target, reduction="none"
+            logits, target_expanded, reduction="none"
         )  # (B, T, V)
 
-        # Mask out padding baskets
+        # Mask out padding baskets and average
         mask = basket_mask.unsqueeze(-1).float()  # (B, T, 1)
-        masked_loss = per_element_loss * mask  # (B, T, V)
+        masked_loss = (per_element_loss * mask).sum() / mask.sum().clamp(min=1.0)
 
-        # Sum over vocabulary (V), average over baskets
-        return masked_loss.sum() / mask.sum().clamp(min=1.0)
+        return masked_loss

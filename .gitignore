@@ -2,12 +2,13 @@
 # Dependencies & Virtual Environments
 # ============================================
 .venv/
-.rec-venv/
+.rec-venv
 __pycache__/
 **/__pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.zip
 .Python
 
 # ============================================
@@ -21,10 +22,6 @@ uv.lock
 # ============================================
 data/raw/
 data/processed/
-*.zip
-*.tar.gz
-*.tgz
-*.rar
 session-ses_*.md
 
 # ============================================
@@ -66,4 +63,4 @@ Thumbs.db
 # Python build artifacts
 build/
 dist/
-*.egg-info/
+*.egg-info/data/processed.zip

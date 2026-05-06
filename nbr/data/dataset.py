@@ -1,8 +1,11 @@
-"""PyTorch Dataset and collator for basket sequences."""
+"""PyTorch Dataset and collator for causal GPT-style basket sequences.
+
+One sample per user: all baskets are returned.
+The collator builds input (all baskets) and target (shifted-by-1) tensors
+so that a single forward pass trains all n-1 next-basket prediction positions.
+"""
 
 from __future__ import annotations
-
-from collections import defaultdict
 
 import polars as pl
 import torch
@@ -10,10 +13,13 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class BasketSequenceDataset(Dataset):
-    """One training example per user: predict the last basket from history.
+    """All-baskets dataset for causal GPT-style training.
 
-    For each user, the input is up to ``max_seq_len`` most recent baskets
-    (excluding the last one), and the target is the last basket.
+    For each user, returns ALL baskets in order. The collator handles the
+    causal shift: input at position t predicts target at position t+1.
+
+    Users with fewer than 2 baskets are excluded (need at least one
+    input-target pair).
     """
 
     def __init__(
@@ -24,21 +30,19 @@ class BasketSequenceDataset(Dataset):
     ) -> None:
         """
         Args:
-            df: train DataFrame with columns [user_id: i32, order_idx: i32, item_id: i32].
-            max_seq_len: maximum number of historical baskets to use as input.
-            min_history_len: minimum number of history baskets required.
+            df: train/val/test DataFrame with columns
+                [user_id: i32, order_idx: i32, item_id: i32].
+            max_seq_len: maximum total baskets to keep per user (most recent).
+            min_history_len: minimum number of baskets required (before filtering).
         """
         if min_history_len < 0:
             raise ValueError("min_history_len must be >= 0")
         self.max_seq_len = max_seq_len
         self.min_history_len = min_history_len
 
-        # Group baskets by user, sorted by order_idx
-        # user_baskets[user_id] = [[item_ids for basket 0], [item_ids for basket 1], ...]
         self.user_baskets: dict[int, list[list[int]]] = {}
         self.user_ids: list[int] = []
 
-        # Sort by user_id then order_idx
         df_sorted = df.sort(["user_id", "order_idx"])
 
         current_user: int | None = None
@@ -46,135 +50,150 @@ class BasketSequenceDataset(Dataset):
         current_basket: list[int] = []
         user_basket_list: list[list[int]] = []
 
+        def _flush_user(uid: int, baskets: list[list[int]]) -> None:
+            if len(baskets) < 2:          # need at least one input→target pair
+                return
+            self.user_baskets[uid] = baskets
+            self.user_ids.append(uid)
+
         for row in df_sorted.iter_rows(named=True):
             uid = int(row["user_id"])
             oid = int(row["order_idx"])
             iid = int(row["item_id"])
 
             if uid != current_user:
-                # Save previous user
                 if current_user is not None:
                     if current_basket:
                         user_basket_list.append(current_basket)
-                    if len(user_basket_list) >= self.min_history_len + 1:
-                        self.user_baskets[current_user] = user_basket_list
-                        self.user_ids.append(current_user)
+                    _flush_user(current_user, user_basket_list)
                 current_user = uid
                 current_order = oid
                 current_basket = [iid]
                 user_basket_list = []
             elif oid != current_order:
-                # New basket for same user
                 user_basket_list.append(current_basket)
                 current_order = oid
                 current_basket = [iid]
             else:
-                # Same basket, add item
                 current_basket.append(iid)
 
-        # Don't forget the last user
+        # flush last user
         if current_user is not None:
             if current_basket:
                 user_basket_list.append(current_basket)
-            if len(user_basket_list) >= self.min_history_len + 1:
-                self.user_baskets[current_user] = user_basket_list
-                self.user_ids.append(current_user)
+            _flush_user(current_user, user_basket_list)
 
     def __len__(self) -> int:
         return len(self.user_ids)
 
     def __getitem__(self, idx: int) -> dict:
-        """Return a single training example.
+        """Return all baskets for a user.
 
         Returns:
             {
-                "item_seqs": list[list[int]]  # up to max_seq_len historical baskets
-                "target_items": list[int]     # items in the target (last) basket
+                "baskets": list[list[int]]  — all baskets, up to max_seq_len
                 "user_id": int
             }
         """
         uid = self.user_ids[idx]
         baskets = self.user_baskets[uid]
 
-        # Causal training: input is [B_0, ..., B_{N-2}], target is [B_1, ..., B_{N-1}]
-        # This way at index t, history is [B_0, ..., B_t] and target is B_{t+1}
-        history = baskets[:-1]
-        targets = baskets[1:]
-
-        # Take up to max_seq_len most recent baskets
-        if len(history) > self.max_seq_len:
-            history = history[-self.max_seq_len :]
-            targets = targets[-self.max_seq_len :]
+        # Keep most recent max_seq_len baskets
+        if len(baskets) > self.max_seq_len:
+            baskets = baskets[-self.max_seq_len:]
 
         return {
-            "item_seqs": history,
-            "target_seqs": targets,
+            "baskets": baskets,
             "user_id": uid,
         }
 
 
 class BasketCollator:
-    """Pad variable-length basket sequences into a batch of tensors."""
+    """Pad variable-length basket sequences into a batch of tensors.
 
-    def __init__(self, vocab_size: int) -> None:
+    Causal GPT convention (identical to nanoGPT):
+        items[:, t, :]  = basket t   (input)
+        targets[:, t, :] = multi-hot of basket t+1  (supervision)
+
+    The last basket position (T-1) has no target — it is masked out in the
+    loss via basket_mask_target which is basket_mask with the last position False.
+    """
+
+    def __init__(self, vocab_size: int, item_id_offset: int = 0) -> None:
         """
         Args:
-            vocab_size: total number of unique items (for multi-hot target).
+            vocab_size: total number of unique items (raw, without offset).
+            item_id_offset: offset for item IDs (e.g. 2 for BERT to reserve PAD/MASK).
         """
-        self.vocab_size = vocab_size
+        self.raw_vocab_size = vocab_size
+        self.item_id_offset = item_id_offset
+        self.vocab_size = vocab_size + item_id_offset
 
     def __call__(self, batch: list[dict]) -> dict[str, torch.Tensor]:
         """Collate a list of samples into a padded batch.
 
         Returns:
             {
-                "items": (B, T, S) int64 — item IDs, 0-padded
-                "basket_mask": (B, T) bool — True for real baskets
-                "item_mask": (B, T, S) bool — True for real items
-                "target": (B, T, V) float32 — multi-hot ground truth sequence
-                "user_ids": (B,) int64
+                "items":         (B, T, S) int64  — item IDs for each basket position
+                "item_mask":     (B, T, S) bool   — True for real items
+                "basket_mask":   (B, T) bool       — True for real basket positions
+                "targets":       (B, T, V) float32 — normalised multi-hot for basket t+1
+                                                     (position T-1 is zeros / masked)
+                "basket_mask_target": (B, T) bool  — valid target positions (basket_mask
+                                                     shifted: positions 0..T-2 are True
+                                                     for real baskets that have a next basket)
+                "user_ids":      (B,) int64
             }
         """
         batch_size = len(batch)
 
-        # Find max sequence length (T) and max basket size (S) in this batch
-        max_t = max(len(sample["item_seqs"]) for sample in batch)
+        # Sequence length T = full basket list length (all baskets are input)
+        max_t = max(len(sample["baskets"]) for sample in batch)
         max_s = (
-            max(len(basket) for sample in batch for basket in sample["item_seqs"])
+            max(len(b) for sample in batch for b in sample["baskets"])
             if max_t > 0
-            else 0
+            else 1
         )
+        max_s = max(max_s, 1)
 
-        # 0 is the padding index
         items = torch.zeros((batch_size, max_t, max_s), dtype=torch.int64)
         basket_mask = torch.zeros((batch_size, max_t), dtype=torch.bool)
         item_mask = torch.zeros((batch_size, max_t, max_s), dtype=torch.bool)
-        target = torch.zeros((batch_size, max_t, self.vocab_size), dtype=torch.float32)
+        targets = torch.zeros((batch_size, max_t, self.vocab_size), dtype=torch.float32)
+        basket_mask_target = torch.zeros((batch_size, max_t), dtype=torch.bool)
         user_ids = torch.zeros(batch_size, dtype=torch.int64)
 
         for b, sample in enumerate(batch):
             user_ids[b] = sample["user_id"]
+            baskets = sample["baskets"]
+            n = len(baskets)          # actual number of baskets for this user
 
-            # Pad item sequences and targets
-            for t, (basket, target_basket) in enumerate(
-                zip(sample["item_seqs"], sample["target_seqs"])
-            ):
+            # Fill input baskets
+            for t, basket in enumerate(baskets):
                 basket_mask[b, t] = True
-                
-                # Multi-hot target for this timestep
-                for item_id in target_basket:
-                    if 0 < item_id < self.vocab_size:
-                        target[b, t, item_id] = 1.0
-
-                # History items
                 for s, item_id in enumerate(basket):
-                    items[b, t, s] = item_id
+                    # Shift item ID by offset (e.g. for BERT)
+                    items[b, t, s] = item_id + self.item_id_offset
                     item_mask[b, t, s] = True
+
+            # Fill targets: target at position t = multi-hot of basket t+1
+            for t in range(n - 1):
+                next_basket = baskets[t + 1]
+                raw = torch.zeros(self.vocab_size, dtype=torch.float32)
+                for item_id in next_basket:
+                    shifted_id = item_id + self.item_id_offset
+                    if 0 <= shifted_id < self.vocab_size:
+                        raw[shifted_id] = 1.0
+                s = raw.sum()
+                if s > 0:
+                    targets[b, t] = raw / s          # uniform dist over basket items
+                basket_mask_target[b, t] = True      # this position has a valid target
 
         return {
             "items": items,
-            "basket_mask": basket_mask,
             "item_mask": item_mask,
-            "target": target,
+            "basket_mask": basket_mask,
+            "targets": targets,
+            "basket_mask_target": basket_mask_target,
             "user_ids": user_ids,
         }

@@ -1,12 +1,5 @@
 # Changelog
 
-## 2026-04-28 — Causal Supervision & Training Stability
-- Added: `scripts/evaluate_vanilla.py` to allow standalone evaluation of model checkpoints on the test set.
-- Changed: `nbr/data/dataset.py` now provides sequential (causal) targets, enabling GPT-style "next-basket" prediction at every timestep.
-- Changed: `nbr/models/vanilla.py` loss calculation now uses full sequence supervision and is properly normalized by vocabulary size for numerical stability.
-- Changed: `nbr/train/vanilla_lightning.py` now logs `val_loss` explicitly to ensure checkpoint filenames are populated correctly.
-- Fixed: Resolved a bug where validation loss was being reported as 0.0000 due to metric name mismatch and lack of normalization.
-
 ## 2025-XX-XX — Project initialized
 - Added: instructions.md and tasks.md in repo root
 
@@ -157,9 +150,3 @@
 - Changed: results/bert_warmup.md with canonical location for saved run config snapshots.
 - Changed: INSTRUCTIONS.md to document that run snapshots belong in `results/run_configs/` and not `configs/`.
 - Changed: CONTEXT.md and results/bert_warmup.md to document that `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt` are also copied into `data/processed/<dataset>/` on the training machine after runs.
-
-## 2026-04-26 — BERT+GPT pipeline integration
-- Changed: `nbr/train/vanilla_lightning.py` to allow loading pretrained BERT weights from a bundle via `pretrained_bert_path`.
-- Changed: `scripts/train_vanilla.py` to pass the `pretrained_bert_path` from Hydra config to the Lightning module.
-- Added: `configs/model/bert_gpt.yaml` with default parameters for the combined model and weight loading path.
-- Added: `kaggle_train.ipynb` for easy model training on Kaggle, including dependency installation and script invocation.

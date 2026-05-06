@@ -1,3 +1,5 @@
+"""Lightning DataModule for basket sequence datasets."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,12 +22,14 @@ class BasketDataModule(LightningDataModule):
         batch_size: int,
         max_seq_len: int,
         num_workers: int,
+        item_id_offset: int = 0,
     ) -> None:
         super().__init__()
         self.processed_dir = Path(processed_dir)
         self.batch_size = batch_size
         self.max_seq_len = max_seq_len
         self.num_workers = num_workers
+        self.item_id_offset = item_id_offset
 
         self._train: BasketSequenceDataset | None = None
         self._val: BasketSequenceDataset | None = None
@@ -44,19 +48,18 @@ class BasketDataModule(LightningDataModule):
         train_df, val_df, test_df = split_user_baskets(df)
 
         vocab_size = int(df["item_id"].max()) + 1
-        self._collator = BasketCollator(vocab_size=vocab_size)
+        self._collator = BasketCollator(
+            vocab_size=vocab_size,
+            item_id_offset=self.item_id_offset
+        )
 
-        # Train: only training rows (target = second-to-last basket per user, via dataset logic)
         self._train = BasketSequenceDataset(train_df, max_seq_len=self.max_seq_len)
-
-        # Val: train + val rows so each user has history context.
-        # BasketSequenceDataset uses the last basket as target → naturally the val basket.
-        train_val_df = pl.concat([train_df, val_df]).sort(["user_id", "order_idx"])
-        self._val = BasketSequenceDataset(train_val_df, max_seq_len=self.max_seq_len)
-
-        # Test: all rows so each user's full history is available.
-        # BasketSequenceDataset uses the last basket as target → the test basket.
-        self._test = BasketSequenceDataset(df.sort(["user_id", "order_idx"]), max_seq_len=self.max_seq_len)
+        self._val = BasketSequenceDataset(
+            pl.concat([train_df, val_df]), max_seq_len=self.max_seq_len
+        )
+        self._test = BasketSequenceDataset(
+            pl.concat([train_df, val_df, test_df]), max_seq_len=self.max_seq_len
+        )
 
     def train_dataloader(self) -> DataLoader:
         if self._train is None or self._collator is None:

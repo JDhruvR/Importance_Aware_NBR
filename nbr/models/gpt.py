@@ -33,10 +33,6 @@ class RoPEAttention(nn.Module):
         self.out_proj = nn.Linear(dim, dim)
         self.attn_dropout = nn.Dropout(dropout)
 
-        # Precompute RoPE frequencies
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, self.head_dim, 2).float() / self.head_dim))
-        self.register_buffer("inv_freq", inv_freq)
-
     def _apply_rope(self, x: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
         """Apply rotary position embedding to pairs of dimensions.
 
@@ -49,12 +45,8 @@ class RoPEAttention(nn.Module):
         """
         # Split head_dim into pairs
         x1, x2 = x[..., ::2], x[..., 1::2]  # (B, H, T, head_dim//2) each
-        
-        # Calculate frequencies
-        freqs = torch.einsum("i,j->ij", pos.float(), self.inv_freq)
-        sin = torch.sin(freqs).unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim//2)
-        cos = torch.cos(freqs).unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim//2)
-        
+        sin = torch.sin(pos).unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # (1, 1, T, 1)
+        cos = torch.cos(pos).unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # (1, 1, T, 1)
         # Rotate: [x1*cos - x2*sin, x1*sin + x2*cos]
         x_rot = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
         return x_rot
