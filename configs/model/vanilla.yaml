@@ -1,9 +1,12 @@
-# Vanilla NBR model config
-model_type: vanilla
-D: 128 # embedding / hidden dimension
-L1: 2 # intra-basket encoder layers
-L2: 2 # inter-basket GPT layers
-dk: 64 # intent subspace dimension
-K1: 4 # number of attention heads (intra-basket)
-K2: 4 # number of attention heads (inter-basket)
-num_heads: 4
+# Vanilla / BERT+GPT NBR model config
+model_type: bert_gpt              # 'vanilla' or 'bert_gpt'
+D: 128                            # embedding / hidden dimension (must match BERT bundle)
+L1: 2                             # intra-basket encoder layers  (bert_gpt: inferred from bundle)
+L2: 4                             # inter-basket GPT layers
+dk: 64                            # intent subspace dimension (unused in bert_gpt)
+K1: 4                             # attention heads  (intra-basket)
+K2: 4                             # attention heads  (inter-basket / GPT)
+num_heads: 4                      # convenience alias used by train scripts
+
+# BERT+GPT specific
+bert_bundle_path: data/processed/tafeng/bert_encoder_bundle_tafeng.pt

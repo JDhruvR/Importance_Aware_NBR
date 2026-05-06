@@ -11,7 +11,7 @@ from lightning import LightningModule
 
 from nbr.metrics.ranking import build_history_multihot, ndcg_at_k, recall_at_k
 from nbr.models.bert_gpt.model import BertGptNBR
-# from nbr.models.vanilla import VanillaNBR
+from nbr.models.vanilla import VanillaNBR
 
 
 class VanillaLitModule(LightningModule):
