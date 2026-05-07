@@ -155,3 +155,11 @@
 - Added: scripts/compute_importance.py to compute alpha_idf, raw_importance, and idf_factor.
 - Added: configs/compute_importance.yaml for standalone configuration of importance computation.
 - Done: T3.1 implemented successfully, batched processing over training baskets works with efficient memory footprint.
+
+## 2026-05-07 — Importance score validation
+- Added: scripts/check_importance.py to validate importance_scores.npz (shapes, ranges, consistency, top/bottom items, correlations).
+- Added: results/importance_scores.md with full Instacart validation output (all checks pass).
+
+## 2026-05-07 — Importance head module (T3.2)
+- Added: nbr/models/importance.py with ImportanceHead (two-layer MLP with sigmoid) and importance_init_loss (masked MSE).
+- Added: tests/test_importance.py with shape, value-range, gradient, masking, and optimization convergence tests.

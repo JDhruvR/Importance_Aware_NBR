@@ -1,7 +1,8 @@
 # Context
 
 ## Current State
-Phase 3 geometric importance score computation script (T3.1) is now implemented. The script (`scripts/compute_importance.py`) supports efficiently batching over large datasets to compute $\overline{\Delta}$, the IDF factor, and $\alpha_{idf}$. Plain BERT warmup is also fully set up.
+Phase 3 importance scoring is complete through T3.2. The importance head module (`nbr/models/importance.py`) and its initialization loss are implemented and tested. Geometric importance scores (T3.1) have been computed and validated for the Instacart dataset — all 6 validation checks pass with healthy distributions.
+
 Current default BERT warmup training config in `configs/train/bert_warmup.yaml` is tuned from recent Instacart probe behavior for faster but stable convergence:
 - `lr=1.2e-3`, `batch_size=256`, `epochs=24`, `warmup_steps=1000`, `min_lr_ratio=0.02`
 - `weight_decay=4e-3`, `dropout=0.22`, `label_smoothing=0.03`, `early_stop_patience=4`
@@ -34,7 +35,7 @@ Config hygiene update completed: W&B-exported run snapshot YAMLs are now archive
 - T2.7: scripts/train_word2vec.py implemented
 - T2.8: Word2Vec pre-training completed for Instacart/TaFeng/Dunnhumby (`word2vec_dim128.kv` present)
 
-**Phase 3 — Plain BERT Warmup & Importance (new):**
+**Phase 3 — Plain BERT Warmup & Importance:**
 - Added `nbr/data/basket_mlm_dataset.py`: basket-level MLM dataset/collator (each basket = sentence)
 - Added `nbr/models/bert.py`: BasketBERT model (item embedding + IntraBasketEncoder + tied MLM head)
 - Added `nbr/train/bert_data_module.py`: lightweight dataloader builder (plain PyTorch)
@@ -42,7 +43,19 @@ Config hygiene update completed: W&B-exported run snapshot YAMLs are now archive
 - Added configs: `configs/model/bert.yaml`, `configs/train/bert_warmup.yaml`, `configs/bert_warmup.yaml`
 - Removed `nbr/train/bert_lightning.py` (no-Lightning policy)
 - Added `results/bert_warmup.md` with smoke-run outputs and metrics
-- T3.1: `scripts/compute_importance.py` implemented to compute `alpha_idf` scores using the pre-trained `IntraBasketEncoder` and batched masking strategy.
+- T3.1: `scripts/compute_importance.py` computes `alpha_idf` scores using the pre-trained `IntraBasketEncoder` and batched masking strategy. Validated on Instacart with `scripts/check_importance.py` — all checks pass.
+- T3.2: `nbr/models/importance.py` implements `ImportanceHead` (two-layer MLP: `Linear(D, D//2)` → `GELU` → `Linear(D//2, 1)` → `Sigmoid`) and `importance_init_loss` (masked MSE against normalized alpha_idf targets). Tests in `tests/test_importance.py`.
+
+## Instacart Importance Score Validation Summary
+- All 47,969/47,975 items have non-zero α_idf (6 items only in val/test)
+- α_idf: mean=1.117, std=0.511, right-skewed (expected)
+- raw_importance: mean=0.107 ≈ 1/avg_basket_size (expected)
+- idf_factor: mean=10.598, range consistent with N≈3M training baskets
+- Multiplicative consistency: α_idf = raw × idf exactly (max diff = 0.00)
+- Top items: Dry Ice, California Champagne, Blue Label whiskey (niche/distinctive)
+- Bottom items: Organic Strawberries, Baby Spinach, Limes (common staples)
+- Correlations: raw↔α_idf = +0.92 (raw dominates), idf↔α_idf = +0.20 (secondary boost)
+- Full results in `results/importance_scores.md`
 
 ## Latest Run Snapshot
 Dataset: Instacart probe (4 epochs)
@@ -56,16 +69,9 @@ Observed epoch logs (key trend):
 - epoch3: train_loss 7.1355, val_loss 6.9196, train_acc 0.1217, val_acc 0.1229
 - epoch4: train_loss 7.0734, val_loss 6.8816, train_acc 0.1235, val_acc 0.1230
 
-Diagnosis from probe:
-- stable optimization with no overfitting signal in first 4 epochs
-- tiny train/val gap, so previous stronger regularization looked somewhat underfitting
-- very long epoch wall-clock on large datasets is expected; not a model stall
-
 Recent full-run snapshots archived:
 - `results/run_configs/bert_warmup/tafeng_2026-04-20_00-12-59.yaml`
 - `results/run_configs/bert_warmup/dunnhumby_2026-04-20_00-56-51.yaml`
-
-W&B run URLs and local output dirs are still discoverable in those snapshot files.
 
 Artifacts from full runs remain under `outputs/<date>/<time>/` with:
 - `bert_best.pt`
@@ -77,10 +83,21 @@ For downstream collaborator convenience, `bert_best.pt` and `bert_encoder_bundle
 are also being placed under `data/processed/<dataset>/` on the training machine after runs.
 
 ## Next Task
-T3.2 — Importance head module
-Create `nbr/models/importance.py` containing:
-- `ImportanceHead(nn.Module)`: A two-layer MLP (`Linear(D, D//2)` → `GELU` → `Linear(D//2, 1)` → `Sigmoid`) mapping item representations `(B*T, S, D)` to importance weights `(B*T, S)` in `[0, 1]`.
-- `importance_init_loss`: An MSE loss function to pre-train the `ImportanceHead` by pushing the predicted weights towards the `alpha_idf` target scores (computed in T3.1), masked to real items only.
+T4.1 — Gated basket fusion module
+Create `nbr/models/fusion.py` containing:
+- `DualStreamFusion(nn.Module)`:
+  - `forward(cls_repr, item_reprs, importance, item_mask) -> Tensor`
+  - `cls_repr`: `(B*T, D)` — full basket summary from BERT encoder.
+  - `item_reprs`: `(B*T, S, D)` — per-item representations from BERT encoder.
+  - `importance`: `(B*T, S)` — from `ImportanceHead`.
+  - `item_mask`: `(B*T, S)` bool.
+  - Computes `basket_core` as importance-weighted mean over real items.
+  - Computes elementwise gate `g = sigmoid(W_g([basket_full; basket_core]))`.
+  - Returns `g * basket_full + (1 - g) * basket_core`: `(B*T, D)`.
+- `W_g` is `nn.Linear(2*D, D, bias=True)`.
+
+Depends on: `ImportanceHead` from T3.2 (done), `IntraBasketEncoder` from T2.2 (done).
+
 ## Decisions Made
 - Current scope restricted to plain BERT warmup baseline only.
 - BERT uses basket-as-sentence setup: item tokens per basket, CLS output as basket representation.
