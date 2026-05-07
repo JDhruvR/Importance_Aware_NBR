@@ -165,4 +165,4 @@
 - Added: tests/test_importance.py with shape, value-range, gradient, masking, and optimization convergence tests.
 - Added: scripts/train_importance_head.py for pre-training ImportanceHead against normalized alpha_idf targets (frozen BERT encoder).
 - Added: configs/train_importance_head.yaml with training hyperparameters (lr=3e-3, 15 epochs, early stopping).
-
+- Added: scripts/check_importance_head.py to validate trained ImportanceHead (6 checks: structure, range, correlation, per-item agreement, context sensitivity, ranking).
