@@ -1,0 +1,26 @@
+defaults:
+  - data: instacart
+  - model: bert
+  - _self_
+
+seed: 42
+device: auto
+output_dir: outputs/importance_head/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+train:
+  epochs: 15
+  batch_size: 512
+  lr: 0.003
+  weight_decay: 1.0e-4
+  warmup_steps: 100
+  min_lr_ratio: 0.01
+  grad_clip: 1.0
+  early_stop_patience: 5
+  early_stop_min_delta: 1.0e-5
+  log_every_n_steps: 20
+  num_workers: 4
+  max_items_per_basket: 50
+  max_train_baskets: null
+  max_val_baskets: null
+  run_name: null
+  wandb_project: importance-aware-nbr
