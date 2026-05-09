@@ -104,11 +104,12 @@ def main(cfg: DictConfig):
         total_loss = 0.0
         
         for batch in train_loader:
-            items, item_mask, basket_mask, targets = (
-                batch["items"].to(device), 
-                batch["item_mask"].to(device), 
+            items, item_mask, basket_mask, basket_mask_target, targets = (
+                batch["items"].to(device),
+                batch["item_mask"].to(device),
                 batch["basket_mask"].to(device),
-                batch["targets"].to(device) # Expected multi-hot (B, T, V)
+                batch["basket_mask_target"].to(device),
+                batch["targets"].to(device), # Expected multi-hot (B, T, V)
             )
             if targets.shape[-1] < vocab_size:
                 targets = F.pad(targets, (0, vocab_size - targets.shape[-1]), value=0)
@@ -120,7 +121,7 @@ def main(cfg: DictConfig):
             logits = outputs["logits"] # (B, T, V)
             
             # Mask out padding baskets in the sequence
-            active_baskets = basket_mask.flatten()
+            active_baskets = basket_mask_target.flatten()
             flat_logits = logits.view(-1, logits.shape[-1])[active_baskets]
             flat_targets = targets.view(-1, targets.shape[-1])[active_baskets]
 
@@ -139,23 +140,83 @@ def main(cfg: DictConfig):
         wandb.log({"train/bce_loss": avg_loss, "epoch": epoch})
         logger.info(f"Epoch {epoch} | Loss: {avg_loss:.4f}")
 
+        if (epoch + 1) % cfg.trainer.eval_every == 0:
+            model.eval()
+            val_loss = 0.0
+            val_recalls, val_ndcgs, val_hit1 = [], [], []
+            with torch.no_grad():
+                for batch in val_loader:
+                    items, item_mask, basket_mask, basket_mask_target, targets = (
+                        batch["items"].to(device),
+                        batch["item_mask"].to(device),
+                        batch["basket_mask"].to(device),
+                        batch["basket_mask_target"].to(device),
+                        batch["targets"].to(device),
+                    )
+
+                    outputs = model(items, item_mask, basket_mask)
+                    logits = outputs["logits"]
+
+                    active_baskets = basket_mask_target.flatten()
+                    flat_logits = logits.view(-1, logits.shape[-1])[active_baskets]
+                    flat_targets = targets.view(-1, targets.shape[-1])[active_baskets]
+
+                    if flat_targets.shape[-1] < flat_logits.shape[-1]:
+                        flat_targets = F.pad(
+                            flat_targets,
+                            (0, flat_logits.shape[-1] - flat_targets.shape[-1]),
+                            value=0,
+                        )
+
+                    batch_loss = F.binary_cross_entropy_with_logits(flat_logits, flat_targets.float())
+                    val_loss += batch_loss.item()
+
+                    seq_lengths = basket_mask_target.sum(dim=1).long() - 1
+                    last_logits = logits[torch.arange(len(items)), seq_lengths, :]
+                    target_last = targets[torch.arange(len(items)), seq_lengths, :]
+
+                    val_recalls.append(recall_at_k(last_logits, target_last, k=10).mean().item())
+                    val_ndcgs.append(ndcg_at_k(last_logits, target_last, k=10).mean().item())
+                    top1 = torch.topk(last_logits, k=1, dim=-1).indices
+                    hits1 = torch.gather(target_last, 1, top1).sum(dim=-1)
+                    val_hit1.append((hits1 > 0).float().mean().item())
+
+            val_loss = val_loss / max(len(val_loader), 1)
+            wandb.log(
+                {
+                    "val/bce_loss": val_loss,
+                    "val/recall@10": sum(val_recalls) / max(len(val_recalls), 1),
+                    "val/ndcg@10": sum(val_ndcgs) / max(len(val_ndcgs), 1),
+                    "val/hit@1": sum(val_hit1) / max(len(val_hit1), 1),
+                    "epoch": epoch,
+                }
+            )
+            logger.info(
+                f"Epoch {epoch} | Val loss: {val_loss:.4f} | "
+                f"Recall@10: {sum(val_recalls)/max(len(val_recalls),1):.4f} | "
+                f"NDCG@10: {sum(val_ndcgs)/max(len(val_ndcgs),1):.4f} | "
+                f"Hit@1: {sum(val_hit1)/max(len(val_hit1),1):.4f}"
+            )
+            model.train()
+
     # 5. Validation and Gate Analysis
     model.eval()
     all_recalls, all_ndcgs = [], []
     
     with torch.no_grad():
         for batch in val_loader:
-            items, item_mask, basket_mask = (
-                batch["items"].to(device), 
-                batch["item_mask"].to(device), 
-                batch["basket_mask"].to(device)
+            items, item_mask, basket_mask, basket_mask_target = (
+                batch["items"].to(device),
+                batch["item_mask"].to(device),
+                batch["basket_mask"].to(device),
+                batch["basket_mask_target"].to(device),
             )
-            target_basket = batch["targets"] # <-- Fixed key name
+            targets = batch["targets"].to(device)
             
             outputs = model(items, item_mask, basket_mask)
             
             # Extract last valid basket step for predictions
-            seq_lengths = basket_mask.sum(dim=1).long() - 1
+            seq_lengths = basket_mask_target.sum(dim=1).long() - 1
             last_logits = outputs["logits"][torch.arange(len(items)), seq_lengths, :] # (B, V)
             
             # Gate analysis
@@ -166,7 +227,7 @@ def main(cfg: DictConfig):
                 gate_stats.extend(b_gates.cpu().tolist())
             
             # Metrics
-            target_last = batch["targets"][torch.arange(len(items)), seq_lengths, :]
+            target_last = targets[torch.arange(len(items)), seq_lengths, :]
             
             # Compute for the whole batch at once and average
             batch_recall = recall_at_k(last_logits, target_last, k=10).mean().item()

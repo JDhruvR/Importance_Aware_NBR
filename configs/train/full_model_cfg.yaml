@@ -1,7 +1,7 @@
 seed: 42
-batch_size: 4       # Lowered for CPU testing
+batch_size: 256
 max_seq_len: 30
-num_workers: 0      # Lowered for CPU testing
+num_workers: 8
 
 dataset:
   name: tafeng
@@ -10,7 +10,7 @@ wandb:
   project: IMPORTANCE-AWARE-NBR
 
 trainer:
-  max_epochs: 1     # Single epoch test
+  max_epochs: 20
   reorth_every: 100
 
 model:
@@ -19,7 +19,7 @@ model:
   num_heads: 4
   num_encoder_layers: 2
   num_gpt_layers: 2
-  dropout: 0.1
+  dropout: 0.22
   temperature: 1.0
   k1: 2
   k2: 18
@@ -37,5 +37,5 @@ data:
 
 optim:
   lr: 0.001
-  weight_decay: 0.0001
+  weight_decay: 0.004
   clip_norm: 1.0
