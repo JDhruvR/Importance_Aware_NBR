@@ -97,6 +97,8 @@ def main(cfg: DictConfig):
     
     # Tracking for analysis
     gate_stats = []
+    best_recall = -1.0
+    best_path = PROJECT_ROOT / "data" / "processed" / cfg.dataset.name / "dual_stream_best.pt"
 
     logger.info("Starting Dual-Stream Joint Training (Standard BCE)...")
     for epoch in range(cfg.trainer.max_epochs):
@@ -113,6 +115,8 @@ def main(cfg: DictConfig):
             )
             if targets.shape[-1] < vocab_size:
                 targets = F.pad(targets, (0, vocab_size - targets.shape[-1]), value=0)
+
+            binary_targets = (targets > 0).float()
             
             optimizer.zero_grad()
             outputs = model(items, item_mask, basket_mask)
@@ -123,12 +127,12 @@ def main(cfg: DictConfig):
             # Mask out padding baskets in the sequence
             active_baskets = basket_mask_target.flatten()
             flat_logits = logits.view(-1, logits.shape[-1])[active_baskets]
-            flat_targets = targets.view(-1, targets.shape[-1])[active_baskets]
+            flat_targets = binary_targets.view(-1, binary_targets.shape[-1])[active_baskets]
 
             if flat_targets.shape[-1] < flat_logits.shape[-1]:
                 flat_targets = F.pad(flat_targets, (0, flat_logits.shape[-1] - flat_targets.shape[-1]), value=0)
 
-            loss = F.binary_cross_entropy_with_logits(flat_logits, flat_targets.float())
+            loss = F.binary_cross_entropy_with_logits(flat_logits, flat_targets)
                         
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optim.clip_norm)
@@ -159,7 +163,8 @@ def main(cfg: DictConfig):
 
                     active_baskets = basket_mask_target.flatten()
                     flat_logits = logits.view(-1, logits.shape[-1])[active_baskets]
-                    flat_targets = targets.view(-1, targets.shape[-1])[active_baskets]
+                    binary_targets = (targets > 0).float()
+                    flat_targets = binary_targets.view(-1, binary_targets.shape[-1])[active_baskets]
 
                     if flat_targets.shape[-1] < flat_logits.shape[-1]:
                         flat_targets = F.pad(
@@ -168,12 +173,18 @@ def main(cfg: DictConfig):
                             value=0,
                         )
 
-                    batch_loss = F.binary_cross_entropy_with_logits(flat_logits, flat_targets.float())
+                    batch_loss = F.binary_cross_entropy_with_logits(flat_logits, flat_targets)
                     val_loss += batch_loss.item()
 
                     seq_lengths = basket_mask_target.sum(dim=1).long() - 1
                     last_logits = logits[torch.arange(len(items)), seq_lengths, :]
-                    target_last = targets[torch.arange(len(items)), seq_lengths, :]
+                    target_last = binary_targets[torch.arange(len(items)), seq_lengths, :]
+                    if target_last.shape[-1] < last_logits.shape[-1]:
+                        target_last = F.pad(
+                            target_last,
+                            (0, last_logits.shape[-1] - target_last.shape[-1]),
+                            value=0,
+                        )
 
                     val_recalls.append(recall_at_k(last_logits, target_last, k=10).mean().item())
                     val_ndcgs.append(ndcg_at_k(last_logits, target_last, k=10).mean().item())
@@ -181,22 +192,33 @@ def main(cfg: DictConfig):
                     hits1 = torch.gather(target_last, 1, top1).sum(dim=-1)
                     val_hit1.append((hits1 > 0).float().mean().item())
 
-            val_loss = val_loss / max(len(val_loader), 1)
-            wandb.log(
-                {
-                    "val/bce_loss": val_loss,
-                    "val/recall@10": sum(val_recalls) / max(len(val_recalls), 1),
-                    "val/ndcg@10": sum(val_ndcgs) / max(len(val_ndcgs), 1),
-                    "val/hit@1": sum(val_hit1) / max(len(val_hit1), 1),
-                    "epoch": epoch,
-                }
-            )
-            logger.info(
-                f"Epoch {epoch} | Val loss: {val_loss:.4f} | "
-                f"Recall@10: {sum(val_recalls)/max(len(val_recalls),1):.4f} | "
-                f"NDCG@10: {sum(val_ndcgs)/max(len(val_ndcgs),1):.4f} | "
-                f"Hit@1: {sum(val_hit1)/max(len(val_hit1),1):.4f}"
-            )
+            if len(val_recalls) > 0:
+                val_loss = val_loss / max(len(val_loader), 1)
+                val_recall = sum(val_recalls) / max(len(val_recalls), 1)
+                val_ndcg = sum(val_ndcgs) / max(len(val_ndcgs), 1)
+                wandb.log(
+                    {
+                        "val/bce_loss": val_loss,
+                        "val/recall@10": val_recall,
+                        "val/ndcg@10": val_ndcg,
+                        "val/hit@1": sum(val_hit1) / max(len(val_hit1), 1),
+                        "epoch": epoch,
+                    }
+                )
+                logger.info(
+                    f"Epoch {epoch} | Val loss: {val_loss:.4f} | "
+                    f"Recall@10: {val_recall:.4f} | "
+                    f"NDCG@10: {val_ndcg:.4f} | "
+                    f"Hit@1: {sum(val_hit1)/max(len(val_hit1),1):.4f}"
+                )
+
+                if val_recall > best_recall:
+                    best_recall = val_recall
+                    best_path.parent.mkdir(parents=True, exist_ok=True)
+                    torch.save(model.state_dict(), best_path)
+                    logger.info(f"Saved new best checkpoint to {best_path}")
+            else:
+                logger.warning("Val loader empty. Skipping val metrics.")
             model.train()
 
     # 5. Validation and Gate Analysis
@@ -227,7 +249,13 @@ def main(cfg: DictConfig):
                 gate_stats.extend(b_gates.cpu().tolist())
             
             # Metrics
-            target_last = targets[torch.arange(len(items)), seq_lengths, :]
+            target_last = (targets > 0).float()[torch.arange(len(items)), seq_lengths, :]
+            if target_last.shape[-1] < last_logits.shape[-1]:
+                target_last = F.pad(
+                    target_last,
+                    (0, last_logits.shape[-1] - target_last.shape[-1]),
+                    value=0,
+                )
             
             # Compute for the whole batch at once and average
             batch_recall = recall_at_k(last_logits, target_last, k=10).mean().item()
@@ -236,30 +264,33 @@ def main(cfg: DictConfig):
             all_recalls.append(batch_recall)
             all_ndcgs.append(batch_ndcg)
             
-    final_recall = sum(all_recalls) / len(all_recalls)
-    final_ndcg = sum(all_ndcgs) / len(all_ndcgs)
-    wandb.log({"val/recall@10": final_recall, "val/ndcg@10": final_ndcg})
-    
-    # 6. Detailed Analysis Printout
-    logger.info("=== Final Evaluation Metrics ===")
-    logger.info(f"Recall@10: : {final_recall:.4f}")
-    logger.info(f"NDCG@10   : {final_ndcg:.4f}")
-    
-    logger.info("\n=== Dual-Stream Gate Component Analysis ===")
-    avg_g = sum(gate_stats) / len(gate_stats)
-    logger.info(f"Average Gate Value (g) across valid training baskets: {avg_g:.4f}")
-    logger.info("Interpretation:")
-    logger.info("- Gate 'g' bounds: [0.0, 1.0]")
-    logger.info("- fused_repr = g * [CLS (Full Basket)] + (1 - g) * [Importance-Weighted Basket Core]")
-    if avg_g > 0.5:
-        logger.info(f"-> The model leans heavily ({avg_g:.1%}) towards the FULL basket context (BERT [CLS]).")
+    if len(all_recalls) > 0:
+        final_recall = sum(all_recalls) / len(all_recalls)
+        final_ndcg = sum(all_ndcgs) / len(all_ndcgs)
+        wandb.log({"val/recall@10": final_recall, "val/ndcg@10": final_ndcg})
+        
+        # 6. Detailed Analysis Printout
+        logger.info("=== Final Evaluation Metrics ===")
+        logger.info(f"Recall@10: : {final_recall:.4f}")
+        logger.info(f"NDCG@10   : {final_ndcg:.4f}")
+        
+        logger.info("\n=== Dual-Stream Gate Component Analysis ===")
+        avg_g = sum(gate_stats) / len(gate_stats)
+        logger.info(f"Average Gate Value (g) across valid training baskets: {avg_g:.4f}")
+        logger.info("Interpretation:")
+        logger.info("- Gate 'g' bounds: [0.0, 1.0]")
+        logger.info("- fused_repr = g * [CLS (Full Basket)] + (1 - g) * [Importance-Weighted Basket Core]")
+        if avg_g > 0.5:
+            logger.info(f"-> The model leans heavily ({avg_g:.1%}) towards the FULL basket context (BERT [CLS]).")
+        else:
+            logger.info(f"-> The model leans heavily ({1.0 - avg_g:.1%}) towards the STRICT importance-weighted items.")
     else:
-        logger.info(f"-> The model leans heavily ({1.0 - avg_g:.1%}) towards the STRICT importance-weighted items.")
+        logger.warning("Val loader empty. Skipping final metrics + gate analysis.")
 
      # 7. Save Model Checkpoint
     save_dir = PROJECT_ROOT / "data" / "processed" / cfg.dataset.name
     save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = save_dir / "dual_stream_best.pt"
+    save_path = save_dir / "dual_stream_last.pt"
     logger.info(f"Saving final model weights to {save_path}")
     torch.save(model.state_dict(), save_path)
 

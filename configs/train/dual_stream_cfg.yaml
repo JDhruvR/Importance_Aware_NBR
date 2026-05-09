@@ -4,17 +4,17 @@ dataset:
 wandb:
   project: IMPORTANCE-AWARE-NBR
 trainer:
-  max_epochs: 20
+  max_epochs: 40
   eval_every: 3
 model:
   dim: 128
   num_heads: 4
   num_encoder_layers: 2
   num_gpt_layers: 2
-  dropout: 0.22
+  dropout: 0.3
   intent_dim: 32
 optim:
-  lr: 0.0003
+  lr: 0.0004
   weight_decay: 0.001
   clip_norm: 1.0
 batch_size: 128
