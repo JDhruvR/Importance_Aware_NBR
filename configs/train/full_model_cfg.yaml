@@ -12,6 +12,8 @@ wandb:
 trainer:
   max_epochs: 20
   reorth_every: 100
+  eval_every: 3
+  mlm_mask_prob: 0.15
 
 model:
   dim: 128

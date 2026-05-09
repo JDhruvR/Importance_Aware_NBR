@@ -84,30 +84,22 @@ def _build_mlm_targets(
 def phase3_joint_training(
     model: IntentAwareNBR,
     train_loader,
+    val_loader,
     alpha_idf: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     cfg: DictConfig,
+    save_dir: Path,
 ) -> None:
     """
     All components unfrozen. Trains with the full loss from Eq. 25:
 
         L = L_intent + lambda*L_fill + gamma*L_orth + eta*L_MLM
 
-    - targets partitioned into core / fill via tau_alpha          (Eq. 22)
-    - intent loss importance-weighted by alpha_IDF                (Eq. 23)
-    - fill loss fires only on peripheral items                    (Eq. 24)
-    - orthogonality regulariser keeps h^intent perpendicular to h^fill  (Section V-F)
-    - MLM auxiliary signal for the intra-basket encoder           (Eq. 3)
-    - Gram-Schmidt re-orthonormalization of P every N steps       (Section V-F)
-
-    Expects each batch to contain:
-        "items"          : (B, T, S) — masked item ids (model input)
-        "item_mask"      : (B, T, S)
-        "basket_mask"    : (B, T)
-        "targets"        : (B, T, V) binary next-basket labels
-        "mlm_mask"       : (B, T, S) — 1 at positions masked in `items`
-        "original_items" : (B, T, S) — unmasked item ids for MLM supervision
+    Includes:
+    - Validation every `eval_every` epochs via two-stage residual decode
+    - Best-model checkpointing based on val/recall@10
+    - Full W&B logging of per-step losses, epoch summaries, and val metrics
     """
     logger.info("Phase 3 — joint training with full loss (all components unfrozen)")
 
@@ -121,10 +113,28 @@ def phase3_joint_training(
     mask_token_id = cfg.data.mask_token_id
     reorth_every  = cfg.trainer.get("reorth_every", 100)
     mlm_mask_prob = cfg.trainer.get("mlm_mask_prob", 0.15)
+    eval_every    = cfg.trainer.get("eval_every", 3)
 
-    step_count = 0
+    save_dir.mkdir(parents=True, exist_ok=True)
+    best_ckpt_path = save_dir / "full_model_best.pt"
+    last_ckpt_path = save_dir / "full_model_last.pt"
+
+    best_recall = -1.0
+    best_epoch  = -1
+    step_count  = 0
+
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    wandb.run.summary["total_params"] = total_params
+    wandb.run.summary["trainable_params"] = trainable_params
+    logger.info(f"Parameters: {total_params:,} total, {trainable_params:,} trainable")
+
     for epoch in range(cfg.trainer.max_epochs):
         model.train()
+        epoch_loss = 0.0
+        epoch_losses = {}
+        num_batches = 0
+
         for batch in train_loader:
             items       = batch["items"].to(device)           # (B, T, S)
             item_mask   = batch["item_mask"].to(device)       # (B, T, S)
@@ -138,34 +148,27 @@ def phase3_joint_training(
                 targets = F.pad(targets, (0, pad_size), value=0)
 
             # --- Inline MLM masking (Eq. 3 auxiliary signal) ---
-            # Save original items before masking, then randomly replace
-            # ~15% of real item positions with the [MASK] token.
             original_items = items.clone()
             rand_vals = torch.rand_like(items, dtype=torch.float32)
             mlm_mask = item_mask.bool() & (rand_vals < mlm_mask_prob)
             items = items.clone()
             items[mlm_mask] = mask_token_id
-
-            # Build MLM targets: original id at masked positions,
-            # mask_token_id elsewhere (ignored via ignore_index).
             mlm_targets = _build_mlm_targets(original_items, mlm_mask, mask_token_id)
 
             optimizer.zero_grad()
 
             out = model(items, item_mask, basket_mask)
 
-            # Full loss (Eq. 25):
-            # L = L_intent + λ·L_fill + γ·L_orth + η·L_MLM
             loss, loss_dict = total_loss(
-                intent_logits = out["intent_logits"],   # (B, T, V)
-                fill_logits   = out["fill_logits"],     # (B, T, V)
-                targets       = targets,                # (B, T, V)
-                alpha_idf     = alpha_idf,              # (V,)
+                intent_logits = out["intent_logits"],
+                fill_logits   = out["fill_logits"],
+                targets       = targets,
+                alpha_idf     = alpha_idf,
                 tau_alpha     = tau_alpha,
-                intent_repr   = out["intent_repr"],     # (B, T, D) → L_orth
-                fill_repr     = out["fill_repr"],       # (B, T, D) → L_orth
-                mlm_logits    = out["mlm_logits"],      # (B, T, S, V)
-                mlm_targets   = mlm_targets,            # (B, T, S)
+                intent_repr   = out["intent_repr"],
+                fill_repr     = out["fill_repr"],
+                mlm_logits    = out["mlm_logits"],
+                mlm_targets   = mlm_targets,
                 weights       = loss_weights,
                 mask_token_id = mask_token_id,
             )
@@ -174,25 +177,90 @@ def phase3_joint_training(
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optim.clip_norm)
             optimizer.step()
 
-            # Section V-F: periodic Gram-Schmidt re-orthonormalization of P.
-            # Enforces P^T P = I_dk to prevent the projection from drifting
-            # toward the identity even when L_orth is small.
             step_count += 1
             if step_count % reorth_every == 0:
                 model.orthogonalize_projection()
 
-            wandb.log({**loss_dict, "phase3/step": step_count})
+            # Per-step W&B logging
+            wandb.log({
+                **loss_dict,
+                "phase3/step": step_count,
+                "phase3/lr": optimizer.param_groups[0]["lr"],
+            })
+
+            epoch_loss += loss_dict["loss/total"]
+            for k, v in loss_dict.items():
+                epoch_losses[k] = epoch_losses.get(k, 0.0) + v
+            num_batches += 1
+
+        # ---- Epoch-level logging ----
+        avg_epoch_loss = epoch_loss / max(num_batches, 1)
+        epoch_log = {
+            "epoch": epoch + 1,
+            "train/epoch_loss": avg_epoch_loss,
+        }
+        for k, v in epoch_losses.items():
+            epoch_log[f"train/{k}_epoch"] = v / max(num_batches, 1)
 
         logger.info(
             f"  Phase 3 epoch {epoch+1}/{cfg.trainer.max_epochs}  "
-            f"loss={loss_dict['loss/total']:.4f}  "
-            f"intent={loss_dict['loss/intent']:.4f}  "
-            f"fill={loss_dict['loss/fill']:.4f}  "
-            f"orth={loss_dict['loss/orth']:.4f}  "
-            f"mlm={loss_dict['loss/mlm']:.4f}"
+            f"loss={avg_epoch_loss:.4f}  "
+            f"intent={epoch_losses.get('loss/intent',0)/max(num_batches,1):.4f}  "
+            f"fill={epoch_losses.get('loss/fill',0)/max(num_batches,1):.4f}  "
+            f"orth={epoch_losses.get('loss/orth',0)/max(num_batches,1):.4f}  "
+            f"mlm={epoch_losses.get('loss/mlm',0)/max(num_batches,1):.4f}"
         )
 
-    logger.info("Phase 3 complete")
+        # ---- Save last checkpoint every epoch ----
+        torch.save({
+            "epoch": epoch + 1,
+            "step": step_count,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "config": OmegaConf.to_container(cfg, resolve=True),
+            "train_loss": avg_epoch_loss,
+        }, last_ckpt_path)
+
+        # ---- Validation every eval_every epochs ----
+        if (epoch + 1) % eval_every == 0 or (epoch + 1) == cfg.trainer.max_epochs:
+            val_metrics = run_inference(model, val_loader, device, cfg)
+            epoch_log.update(val_metrics)
+
+            current_recall = val_metrics.get("val/recall@10", 0.0)
+
+            # Save best checkpoint based on val/recall@10
+            if current_recall > best_recall:
+                best_recall = current_recall
+                best_epoch = epoch + 1
+                torch.save({
+                    "epoch": best_epoch,
+                    "step": step_count,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "config": OmegaConf.to_container(cfg, resolve=True),
+                    "val_metrics": val_metrics,
+                    "train_loss": avg_epoch_loss,
+                }, best_ckpt_path)
+                logger.info(
+                    f"  ★ New best model saved at epoch {best_epoch} "
+                    f"(val/recall@10={best_recall:.4f})"
+                )
+
+            model.train()  # switch back after eval
+
+        wandb.log(epoch_log)
+
+    # ---- Final summary ----
+    wandb.run.summary["best_epoch"] = best_epoch
+    wandb.run.summary["best_val_recall@10"] = best_recall
+    wandb.run.summary["best_checkpoint"] = str(best_ckpt_path)
+    wandb.run.summary["last_checkpoint"] = str(last_ckpt_path)
+    wandb.run.summary["total_steps"] = step_count
+
+    logger.info(
+        f"Phase 3 complete — best epoch={best_epoch}, "
+        f"best val/recall@10={best_recall:.4f}"
+    )
 
 
 # ============================================================================ #
@@ -397,21 +465,24 @@ def main(cfg: DictConfig):
         lr=cfg.optim.lr,
         weight_decay=cfg.optim.weight_decay,
     )
-    phase3_joint_training(model, train_loader, alpha_idf, optimizer, device, cfg)
+    phase3_joint_training(
+        model, train_loader, val_loader, alpha_idf, optimizer, device, cfg,
+        save_dir=processed_dir,
+    )
 
     # ------------------------------------------------------------------ #
-    # Inference — Section VI two-stage residual decode on val set          #
+    # Final inference on val set (uses best checkpoint from training)     #
     # ------------------------------------------------------------------ #
+    best_ckpt = processed_dir / "full_model_best.pt"
+    if best_ckpt.exists():
+        logger.info(f"Loading best checkpoint from {best_ckpt}")
+        best_state = torch.load(best_ckpt, map_location=device)
+        model.load_state_dict(best_state["model_state_dict"])
+
     metrics = run_inference(model, val_loader, device, cfg)
-    wandb.log(metrics)
-
-    # ------------------------------------------------------------------ #
-    # Save checkpoint                                                      #
-    # ------------------------------------------------------------------ #
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    save_path = processed_dir / "full_model_best.pt"
-    torch.save(model.state_dict(), save_path)
-    logger.info(f"Model saved to {save_path}")
+    wandb.log({"final/" + k.split("/")[1]: v for k, v in metrics.items()})
+    wandb.finish()
+    logger.info("Done.")
 
 
 if __name__ == "__main__":
