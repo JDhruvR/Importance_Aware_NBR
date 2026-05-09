@@ -1,0 +1,22 @@
+seed: 42
+dataset:
+  name: tafeng
+wandb:
+  project: IMPORTANCE-AWARE-NBR
+trainer:
+  max_epochs: 1
+model:
+  dim: 128
+  num_heads: 4
+  num_encoder_layers: 2
+  num_gpt_layers: 2
+  dropout: 0.1
+  intent_dim: 32
+optim:
+  lr: 0.001
+  weight_decay: 0.0001
+  clip_norm: 1.0
+# -- ADD THESE 3 LINES --
+batch_size: 1
+max_seq_len: 30
+num_workers: 0

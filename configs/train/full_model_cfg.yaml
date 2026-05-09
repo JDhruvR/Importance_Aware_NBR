@@ -1,0 +1,41 @@
+seed: 42
+batch_size: 4       # Lowered for CPU testing
+max_seq_len: 30
+num_workers: 0      # Lowered for CPU testing
+
+dataset:
+  name: tafeng
+
+wandb:
+  project: IMPORTANCE-AWARE-NBR
+
+trainer:
+  max_epochs: 1     # Single epoch test
+  reorth_every: 100
+
+model:
+  dim: 128
+  intent_dim: 32
+  num_heads: 4
+  num_encoder_layers: 2
+  num_gpt_layers: 2
+  dropout: 0.1
+  temperature: 1.0
+  k1: 2
+  k2: 18
+  tau_alpha: 0.5
+
+loss:
+  weights:
+    intent: 1.0
+    fill: 1.0
+    orth: 0.1
+    mlm: 0.3
+
+data:
+  mask_token_id: 1  # Assuming 1 is used for [MASK] in your tokenizer
+
+optim:
+  lr: 0.001
+  weight_decay: 0.0001
+  clip_norm: 1.0
