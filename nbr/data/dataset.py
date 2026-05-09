@@ -179,14 +179,10 @@ class BasketCollator:
             # Fill targets: target at position t = multi-hot of basket t+1
             for t in range(n - 1):
                 next_basket = baskets[t + 1]
-                raw = torch.zeros(self.vocab_size, dtype=torch.float32)
                 for item_id in next_basket:
                     shifted_id = item_id + self.item_id_offset
                     if 0 <= shifted_id < self.vocab_size:
-                        raw[shifted_id] = 1.0
-                s = raw.sum()
-                if s > 0:
-                    targets[b, t] = raw / s          # uniform dist over basket items
+                        targets[b, t, shifted_id] = 1.0
                 basket_mask_target[b, t] = True      # this position has a valid target
 
         return {

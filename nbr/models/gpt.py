@@ -36,6 +36,10 @@ class RoPEAttention(nn.Module):
     def _apply_rope(self, x: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
         """Apply rotary position embedding to pairs of dimensions.
 
+        Each dimension pair rotates at a different frequency θ_i = 1/10000^(2i/d)
+        as defined in the RoFormer paper. Low-frequency pairs capture long-range
+        relative position; high-frequency pairs capture fine-grained local position.
+
         Args:
             x: (B, H, T, head_dim) — queries or keys.
             pos: (T,) — position indices.
@@ -43,10 +47,18 @@ class RoPEAttention(nn.Module):
         Returns:
             (B, H, T, head_dim) — rotated tensor.
         """
-        # Split head_dim into pairs
+        head_dim = x.shape[-1]
+        # Per-pair frequencies: θ_i = 1 / 10000^(2i / head_dim)
+        freqs = 1.0 / (
+            10000.0 ** (torch.arange(0, head_dim, 2, device=x.device).float() / head_dim)
+        )  # (head_dim // 2,)
+        # Angles: pos × θ_i  →  (T, head_dim // 2)
+        angles = pos.unsqueeze(-1) * freqs.unsqueeze(0)
+        sin = angles.sin().unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim//2)
+        cos = angles.cos().unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim//2)
+
+        # Split head_dim into even/odd pairs
         x1, x2 = x[..., ::2], x[..., 1::2]  # (B, H, T, head_dim//2) each
-        sin = torch.sin(pos).unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # (1, 1, T, 1)
-        cos = torch.cos(pos).unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # (1, 1, T, 1)
         # Rotate: [x1*cos - x2*sin, x1*sin + x2*cos]
         x_rot = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
         return x_rot
@@ -60,7 +72,8 @@ class RoPEAttention(nn.Module):
 
         Args:
             x: (B, T, D) — input tensor.
-            causal_mask: (T, T) bool — True where attention is allowed.
+            causal_mask: (B, 1, T, T) bool — True where attention is allowed.
+                         Combines causal constraint with basket padding mask.
 
         Returns:
             (B, T, D) — attention output.
@@ -157,10 +170,17 @@ class CausalBasketGPT(nn.Module):
         b, t, d = basket_reprs.shape
         causal_mask = self._make_causal_mask(t, basket_reprs.device)  # (T, T)
 
+        # Combine causal constraint with basket padding mask so that
+        # padding positions receive -inf attention and don't pollute
+        # the softmax denominator of real basket positions.
+        # basket_mask[:, None, :] → (B, 1, T): blocks attention TO padding keys
+        combined_mask = causal_mask.unsqueeze(0) & basket_mask[:, None, :]  # (B, T, T)
+        combined_mask = combined_mask.unsqueeze(1)  # (B, 1, T, T) for head broadcast
+
         x = basket_reprs
         for block in self.layers:
             # Attention with residual + LayerNorm
-            attn_out = block["attn"](block["ln1"](x), causal_mask)
+            attn_out = block["attn"](block["ln1"](x), combined_mask)
             x = x + attn_out
 
             # FFN with residual + LayerNorm
@@ -169,7 +189,7 @@ class CausalBasketGPT(nn.Module):
 
         x = self.final_ln(x)
 
-        # Apply basket mask: zero out padding positions
+        # Zero out padding positions in the output
         x = x.masked_fill(~basket_mask.unsqueeze(-1), 0.0)
 
         return x

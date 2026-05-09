@@ -120,13 +120,13 @@ def phase3_joint_training(
     tau_alpha     = cfg.model.tau_alpha
     mask_token_id = cfg.data.mask_token_id
     reorth_every  = cfg.trainer.get("reorth_every", 100)
+    mlm_mask_prob = cfg.trainer.get("mlm_mask_prob", 0.15)
 
     step_count = 0
     for epoch in range(cfg.trainer.max_epochs):
         model.train()
         for batch in train_loader:
-           for batch in train_loader:
-            items       = batch["items"].to(device)           # (B, T, S) 
+            items       = batch["items"].to(device)           # (B, T, S)
             item_mask   = batch["item_mask"].to(device)       # (B, T, S)
             basket_mask = batch["basket_mask"].to(device)     # (B, T)
             targets     = batch["targets"].to(device)         # (B, T, V) binary
@@ -137,26 +137,35 @@ def phase3_joint_training(
                 pad_size = model_vocab - targets.shape[-1]
                 targets = F.pad(targets, (0, pad_size), value=0)
 
+            # --- Inline MLM masking (Eq. 3 auxiliary signal) ---
+            # Save original items before masking, then randomly replace
+            # ~15% of real item positions with the [MASK] token.
+            original_items = items.clone()
+            rand_vals = torch.rand_like(items, dtype=torch.float32)
+            mlm_mask = item_mask.bool() & (rand_vals < mlm_mask_prob)
+            items = items.clone()
+            items[mlm_mask] = mask_token_id
+
+            # Build MLM targets: original id at masked positions,
+            # mask_token_id elsewhere (ignored via ignore_index).
+            mlm_targets = _build_mlm_targets(original_items, mlm_mask, mask_token_id)
+
             optimizer.zero_grad()
 
-            # Forward pass — `items` already has [MASK] tokens at mlm_mask positions
             out = model(items, item_mask, basket_mask)
 
-            # Full loss (Eq. 25).
-            # intent_repr / fill_repr come from the decoder's orthogonal projection
-            # of next_basket_repr (the GPT output), NOT from cls_repr.
-            # cls_repr encodes observed past baskets; next_basket_repr is the
-            # model's prediction of the next basket — the correct input to decompose.
+            # Full loss (Eq. 25):
+            # L = L_intent + λ·L_fill + γ·L_orth + η·L_MLM
             loss, loss_dict = total_loss(
                 intent_logits = out["intent_logits"],   # (B, T, V)
                 fill_logits   = out["fill_logits"],     # (B, T, V)
                 targets       = targets,                # (B, T, V)
                 alpha_idf     = alpha_idf,              # (V,)
                 tau_alpha     = tau_alpha,
-                intent_repr   = out["intent_repr"],     # (B, T, D) h^intent -> L_orth
-                fill_repr     = out["fill_repr"],       # (B, T, D) h^fill   -> L_orth
-                mlm_logits    = None,      # (B, T, S, V)
-                mlm_targets   = None,            # (B, T, S)
+                intent_repr   = out["intent_repr"],     # (B, T, D) → L_orth
+                fill_repr     = out["fill_repr"],       # (B, T, D) → L_orth
+                mlm_logits    = out["mlm_logits"],      # (B, T, S, V)
+                mlm_targets   = mlm_targets,            # (B, T, S)
                 weights       = loss_weights,
                 mask_token_id = mask_token_id,
             )
@@ -236,7 +245,7 @@ def run_inference(
             predicted_basket = residual_decode(
                 repr_vec        = h_next[i],
                 item_embeddings = vocab_embeddings,
-                projection      = model.decoder.projection,
+                decoder         = model.decoder,
                 k1              = k1,
                 k2              = k2,
                 excluded        = set(),

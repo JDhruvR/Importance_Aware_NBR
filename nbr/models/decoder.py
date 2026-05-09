@@ -60,11 +60,25 @@ class TwoStageDecoder(nn.Module):
 def residual_decode(
     repr_vec:        torch.Tensor,
     item_embeddings: torch.Tensor,
-    projection:      IntentProjection,
+    decoder:         "TwoStageDecoder",
     k1:              int,
     k2:              int,
     excluded:        set[int],
 ) -> list[int]:
+    """Two-stage residual decode (Section VI, Steps 4-6).
+
+    Args:
+        repr_vec:        (D,) predicted next-basket vector h_{T+1}.
+        item_embeddings: (V, D) full vocabulary embedding matrix.
+        decoder:         TwoStageDecoder — needed for W_cond + LayerNorm.
+        k1:              number of core items (Stage 1, intent subspace).
+        k2:              number of fill items (Stage 2, conditioned on core).
+        excluded:        item IDs to exclude from selection.
+
+    Returns:
+        List of k1 + k2 item IDs: core items first, then fill items.
+    """
+    projection = decoder.projection
     vocab_size = item_embeddings.size(0)
     proj_op    = projection.P @ projection.P.T  # (D, D)
 
@@ -86,15 +100,15 @@ def residual_decode(
         valid_mask[best] = False
         r_intent = r_intent - torch.matmul(proj_op, item_embeddings[best])
 
-    # Stage 2 — fill items conditioned on discovered core (Eqs. 33-35)
+    # Stage 2 — fill items conditioned on discovered core (§VI Steps 5-6)
+    # Use the decoder's learned W_cond and LayerNorm to match training behavior
     core_embs   = item_embeddings[torch.tensor(core_ids, device=repr_vec.device)]
     mean_core   = core_embs.mean(dim=0)                   # hard c~ (Eq. 32)
-    # W_cond and layer_norm live on the decoder, but residual_decode is a
-    # standalone function — pass the conditioned fill repr from the caller,
-    # or inline the shift here using the projection's fill subspace
-    fill_query  = fill_repr + mean_core                    # simplified shift
+    fill_query  = decoder.layer_norm(
+        fill_repr + decoder.W_cond(mean_core)
+    )
     r_fill      = fill_query.clone()
-    fill_proj   = torch.eye(repr_vec.size(0), device=repr_vec.device) - proj_op
+    fill_proj   = torch.eye(repr_vec.size(-1), device=repr_vec.device) - proj_op
 
     fill_ids = []
     for _ in range(k2):

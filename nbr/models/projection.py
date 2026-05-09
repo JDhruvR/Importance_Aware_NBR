@@ -18,10 +18,10 @@ class IntentProjection(nn.Module):
             intent_repr: (B, D)
             fill_repr: (B, D)
         """
-        # P @ P.T is the projection matrix onto the intent subspace
-        proj = self.P @ self.P.T  # (D, D)
-        intent_repr = x @ proj    # (B, D)
-        fill_repr = x - intent_repr # (B, D)
+        # Factor PP^T into two steps: (x @ P) @ P^T avoids materializing
+        # the dense (D, D) projection matrix, halving FLOPs when dk < D/2.
+        intent_repr = (x @ self.P) @ self.P.T  # (B, dk) @ (dk, D) → (B, D)
+        fill_repr = x - intent_repr  # (B, D)
         return intent_repr, fill_repr
 
     def orthogonalize_(self):
