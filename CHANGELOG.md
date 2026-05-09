@@ -166,3 +166,13 @@
 - Added: scripts/train_importance_head.py for pre-training ImportanceHead against normalized alpha_idf targets (frozen BERT encoder).
 - Added: configs/train_importance_head.yaml with training hyperparameters (lr=3e-3, 15 epochs, early stopping).
 - Added: scripts/check_importance_head.py to validate trained ImportanceHead (6 checks: structure, range, correlation, per-item agreement, context sensitivity, ranking).
+
+## 2026-05-09 — Gated fusion, two-stage decoder, and full model
+- Added: nbr/models/gated_fusion.py with `DualStreamFusion`, blending BERT `[CLS]` with importance-weighted basket cores.
+- Added: nbr/models/decoder.py with `TwoStageDecoder` (orthogonal decomposition) and `residual_decode` algorithm (Section VI inference).
+- Added: nbr/models/full_model.py with `IntentAwareNBR`, fully connecting the paper's Phase 3 architecture.
+- Added: configs/train/full_model_cfg.yaml containing the hyperparameter configuration for the full model.
+
+## 2026-05-09 — Phase 3 joint training pipeline
+- Added: experiments/full_model.py to handle Phase 3 joint training (Eq. 25 combinations, Gram-Schmidt re-orthonormalization, dynamic masking, and residual inference).
+- Changed: `nbr/losses.py` to safely handle `None` inputs for MLM predictions when MLM training is skipped or zeroed out.

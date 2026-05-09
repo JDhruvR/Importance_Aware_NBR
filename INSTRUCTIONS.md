@@ -186,9 +186,18 @@ Do not run training jobs unless explicitly requested; implement scripts/configs 
     ```bash
     PYTHONPATH=. uv run python scripts/train_bert.py data=<instacart|tafeng|dunnhumby>
     ```
-5.  **Model Training:** Run downstream model training scripts after warmup artifacts are available.
-
----
+5.  **Importance Head Pre-training (Phase 2):** Train the importance head against frequency-based α-IDF targets and extract the importance scores.
+    ```bash
+    PYTHONPATH=. uv run python scripts/train_importance_head.py
+    ```
+6.  **Dual-Stream Ablation:** Run the dual-stream architecture to test the gated fusion mechanism (evaluating learned gate weights between the full and core baskets) using standard BCE loss.
+    ```bash
+    PYTHONPATH=. uv run python experiments/dual_stream.py
+    ```
+7.  **Full Model Joint Training (Phase 3):** Run the downstream full Intent-Aware NBR model with the joint loss (Intent, Fill, Orthogonality, MLM) and two-stage decoding.
+    ```bash
+    PYTHONPATH=. uv run python experiments/full_model.py
+    ```
 
 ## Evaluation Protocol
 

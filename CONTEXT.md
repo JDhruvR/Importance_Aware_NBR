@@ -46,6 +46,19 @@ Config hygiene update completed: W&B-exported run snapshot YAMLs are now archive
 - T3.1: `scripts/compute_importance.py` computes `alpha_idf` scores using the pre-trained `IntraBasketEncoder` and batched masking strategy. Validated on Instacart with `scripts/check_importance.py` — all checks pass.
 - T3.2: `nbr/models/importance.py` implements `ImportanceHead` (two-layer MLP: `Linear(D, D//2)` → `GELU` → `Linear(D//2, 1)` → `Sigmoid`) and `importance_init_loss` (masked MSE against normalized alpha_idf targets). Tests in `tests/test_importance.py`.
 
+**Phase 4-5 — Fusion, Decoder, and Full Architecture:**
+- `DualStreamFusion` implements learned gates bounded by `[0, 1]` between full and importance-weighted core baskets.
+- Orthogonal decomposition of intent/fill planes functioning, correctly tied to Grammar-Schmidt re-orthonormalization step schedules.
+- Output logits separated into `intent`, `fill`, and aux `mlm`, supervised by multi-part objective in `nbr/losses.py`.
+- Two-stage `residual_decode()` extracts `K1` base intent items and shifts search space to fill `K2` complementary items.
+- Config pipeline successfully isolated. `experiments/full_model.py` actively running single-epoch tests with local dynamic MLM generation.
+
+## Next Task
+**T5.1 — Full Scale Training Executions & Hyperparameter Tuning**
+Now that the entire architecture passes structural smoke tests, the model requires full-scale executions on the Instacart and TaFeng benchmarks:
+- Transfer `experiments/full_model.py` to GPU environments and restore dataset sizing/workers.
+- Perform parameter sweeps on the specific intent capacity (`intent_dim`), decoder thresholds (`k1, k2`), and loss scaling bounds (`lambda, eta`).
+
 ## Instacart Importance Score Validation Summary
 - All 47,969/47,975 items have non-zero α_idf (6 items only in val/test)
 - α_idf: mean=1.117, std=0.511, right-skewed (expected)
@@ -82,21 +95,7 @@ Artifacts from full runs remain under `outputs/<date>/<time>/` with:
 For downstream collaborator convenience, `bert_best.pt` and `bert_encoder_bundle_<dataset>.pt`
 are also being placed under `data/processed/<dataset>/` on the training machine after runs.
 
-## Next Task
-T4.1 — Gated basket fusion module
-Create `nbr/models/fusion.py` containing:
-- `DualStreamFusion(nn.Module)`:
-  - `forward(cls_repr, item_reprs, importance, item_mask) -> Tensor`
-  - `cls_repr`: `(B*T, D)` — full basket summary from BERT encoder.
-  - `item_reprs`: `(B*T, S, D)` — per-item representations from BERT encoder.
-  - `importance`: `(B*T, S)` — from `ImportanceHead`.
-  - `item_mask`: `(B*T, S)` bool.
-  - Computes `basket_core` as importance-weighted mean over real items.
-  - Computes elementwise gate `g = sigmoid(W_g([basket_full; basket_core]))`.
-  - Returns `g * basket_full + (1 - g) * basket_core`: `(B*T, D)`.
-- `W_g` is `nn.Linear(2*D, D, bias=True)`.
 
-Depends on: `ImportanceHead` from T3.2 (done), `IntraBasketEncoder` from T2.2 (done).
 
 ## Decisions Made
 - Current scope restricted to plain BERT warmup baseline only.
