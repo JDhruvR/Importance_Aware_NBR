@@ -30,7 +30,7 @@ model:
   temperature: 1.0
   k1: 2
   k2: 18
-  tau_alpha: 0.5
+  tau_alpha: median
 
 loss:
   weights:

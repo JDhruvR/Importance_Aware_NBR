@@ -133,14 +133,30 @@ def phase3_joint_training(
     best_recall = -1.0
     best_epoch  = -1
     step_count  = 0
+    freeze_epochs = 3  # Freeze backbone for first few epochs to let random Decoder converge
 
     total_params = sum(p.numel() for p in model.parameters())
+    
+    # Initially freeze everything except decoder
+    logger.info(f"Freezing backbone for the first {freeze_epochs} epochs to prevent catastrophic forgetting.")
+    for name, param in model.named_parameters():
+        if "decoder" not in name:
+            param.requires_grad = False
+
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     wandb.run.summary["total_params"] = total_params
-    wandb.run.summary["trainable_params"] = trainable_params
-    logger.info(f"Parameters: {total_params:,} total, {trainable_params:,} trainable")
+    wandb.run.summary["trainable_params_phase1"] = trainable_params
+    logger.info(f"Parameters: {total_params:,} total, {trainable_params:,} trainable (Phase 3.1)")
 
     for epoch in range(cfg.trainer.max_epochs):
+        if epoch == freeze_epochs:
+            logger.info("Unfreezing backbone for joint fine-tuning (Phase 3.2).")
+            for param in model.parameters():
+                param.requires_grad = True
+            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            wandb.run.summary["trainable_params_phase2"] = trainable_params
+            logger.info(f"Parameters: {total_params:,} total, {trainable_params:,} trainable")
+
         model.train()
         epoch_loss = 0.0
         epoch_losses = {}
@@ -546,7 +562,16 @@ def main(cfg: DictConfig):
         alpha_idf = F.pad(alpha_idf, (0, pad_size), value=0.0)
 
     logger.info(f"Loaded alpha_IDF from {alpha_idf_path}  shape={tuple(alpha_idf.shape)}")
-    _log_partition_stats(alpha_idf, cfg.model.tau_alpha)
+    
+    # Compute dynamic tau_alpha if requested
+    tau_config = str(cfg.model.tau_alpha)
+    if tau_config.lower() == "median":
+        tau_alpha = alpha_idf.median().item()
+        cfg.model.tau_alpha = tau_alpha
+    else:
+        tau_alpha = float(tau_config)
+        
+    _log_partition_stats(alpha_idf, tau_alpha)
 
     # ------------------------------------------------------------------ #
     # Phase 3 — Joint training with full loss L (Eq. 25)                  #
