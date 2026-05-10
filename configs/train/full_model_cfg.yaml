@@ -14,7 +14,7 @@ trainer:
     max_epochs: 12
     reorth_every: 100
     eval_every: 3
-    mlm_mask_prob: 0.05
+    mlm_mask_prob: 0.0
 
 model:
     dim: 128
