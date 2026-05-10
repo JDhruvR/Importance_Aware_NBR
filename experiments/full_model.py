@@ -175,12 +175,15 @@ def phase3_joint_training(
                 targets = F.pad(targets, (0, pad_size), value=0)
 
             # --- Inline MLM masking (Eq. 3 auxiliary signal) ---
-            original_items = items.clone()
-            rand_vals = torch.rand_like(items, dtype=torch.float32)
-            mlm_mask = item_mask.bool() & (rand_vals < mlm_mask_prob)
-            items = items.clone()
-            items[mlm_mask] = mask_token_id
-            mlm_targets = _build_mlm_targets(original_items, mlm_mask, mask_token_id)
+            if mlm_mask_prob > 0.0:
+                original_items = items.clone()
+                rand_vals = torch.rand_like(items, dtype=torch.float32)
+                mlm_mask = item_mask.bool() & (rand_vals < mlm_mask_prob)
+                items = items.clone()
+                items[mlm_mask] = mask_token_id
+                mlm_targets = _build_mlm_targets(original_items, mlm_mask, mask_token_id)
+            else:
+                mlm_targets = None
 
             optimizer.zero_grad()
 

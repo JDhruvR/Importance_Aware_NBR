@@ -14,11 +14,7 @@ trainer:
   max_epochs: 12
   reorth_every: 100
   eval_every: 3
-<<<<<<< HEAD
   mlm_mask_prob: 0.0       # Disabled: MLM masking corrupts encoder input during Phase 3
-=======
-  mlm_mask_prob: 0.05
->>>>>>> 8c78d1dd750640532c144a8f7f704909d896415b
 
 model:
   dim: 128
@@ -44,9 +40,5 @@ data:
 
 optim:
   lr: 0.0003
-<<<<<<< HEAD
   weight_decay: 0.001
-=======
-  weight_decay: 0.004
->>>>>>> 8c78d1dd750640532c144a8f7f704909d896415b
   clip_norm: 1.0
