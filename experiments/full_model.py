@@ -33,8 +33,8 @@ from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 
 from nbr.models.full_model import IntentAwareNBR
+from nbr.models.decoder import residual_decode
 from nbr.losses import total_loss
-from nbr.train.data_module import BasketDataModule
 from nbr.utils.seed import seed_everything
 from nbr.utils.device import get_device
 from nbr.metrics.ranking import recall_at_k, ndcg_at_k
@@ -275,7 +275,7 @@ def phase3_joint_training(
 
 
 # ============================================================================ #
-#  Inference — flat top-K from combined/intent/fill logits                     #
+#  Inference — two paths: residual decode (Section VI) + flat top-K diagnostic #
 # ============================================================================ #
 
 @torch.no_grad()
@@ -286,39 +286,50 @@ def run_inference(
     cfg: DictConfig,
 ) -> dict:
     """
-    Evaluate using flat top-K from the model's logit heads.
+    Evaluate using both the paper's residual decode and flat top-K diagnostic.
 
-    Logs three sets of metrics to diagnose which head is learning:
+    Logs metrics to diagnose which head is learning:
       - combined (intent + fill logits)  — what matters for overall performance
       - intent-only                      — is the projection learning core items?
       - fill-only                        — is the fill head learning peripheral items?
+      - residual decode                  — the paper's actual 6-step inference
 
     Also logs the average cosine similarity between intent and fill representations
     as a live orthogonality diagnostic.
     """
-    logger.info("Running inference (flat top-K diagnostic)...")
+    logger.info("Running inference (residual decode + flat top-K diagnostic)...")
     model.eval()
 
-    basket_mask_key = "basket_mask_target"
+    k1 = cfg.model.k1
+    k2 = cfg.model.k2
 
+    # Flat top-K metrics
     combined_r10, combined_n10 = [], []
     combined_r20, combined_n20 = [], []
     intent_r10, fill_r10 = [], []
     orth_sims = []
+    
+    # Residual decode metrics
+    res_recalls_10, res_ndcgs_10 = [], []
+    res_recalls_20, res_ndcgs_20 = [], []
 
     for batch in val_loader:
         items       = batch["items"].to(device)
         item_mask   = batch["item_mask"].to(device)
         basket_mask = batch["basket_mask"].to(device)
-        bm_target   = batch[basket_mask_key].to(device)
+        bm_target   = batch["basket_mask_target"].to(device)
         targets     = batch["targets"].to(device)
 
         out = model(items, item_mask, basket_mask)
 
-        # Use the last valid target position per user (same as dual-stream eval)
+        # Use the last valid target position per user
         seq_lengths = bm_target.sum(dim=1).long() - 1
+        seq_lengths = seq_lengths.clamp(min=0)
         B = items.size(0)
         idx = torch.arange(B, device=device)
+
+        h_next = out["next_basket_repr"][idx, seq_lengths, :]    # (B, D)
+        vocab_embeddings = model.item_embedding.embedding.weight # (V, D)
 
         intent_logits = out["intent_logits"][idx, seq_lengths, :]  # (B, V)
         fill_logits   = out["fill_logits"][idx, seq_lengths, :]    # (B, V)
@@ -329,6 +340,7 @@ def run_inference(
         if target_last.shape[-1] < combined.shape[-1]:
             target_last = F.pad(target_last, (0, combined.shape[-1] - target_last.shape[-1]))
 
+        # --- Flat Metrics ---
         combined_r10.append(recall_at_k(combined, target_last, 10).mean().item())
         combined_n10.append(ndcg_at_k(combined, target_last, 10).mean().item())
         combined_r20.append(recall_at_k(combined, target_last, 20).mean().item())
@@ -343,22 +355,55 @@ def run_inference(
         cos = F.cosine_similarity(h_intent, h_fill, dim=-1).abs().mean().item()
         orth_sims.append(cos)
 
+        # --- Residual decode (Section VI) ---
+        for i in range(items.size(0)):
+            target = target_last[i]
+            predicted_basket = residual_decode(
+                repr_vec=h_next[i], item_embeddings=vocab_embeddings,
+                decoder=model.decoder, k1=k1, k2=k2, excluded=set(),
+            )
+            recs_10 = predicted_basket[:10]
+            recs_20 = predicted_basket[:20]
+
+            preds_10 = torch.zeros_like(target)
+            preds_20 = torch.zeros_like(target)
+            
+            # Clamp the indices to valid vocab size just in case
+            valid_recs_10 = [r for r in recs_10 if 0 <= r < target.size(0)]
+            valid_recs_20 = [r for r in recs_20 if 0 <= r < target.size(0)]
+            
+            if valid_recs_10:
+                preds_10[torch.tensor(valid_recs_10, device=target.device)] = 1.0
+            if valid_recs_20:
+                preds_20[torch.tensor(valid_recs_20, device=target.device)] = 1.0
+
+            res_recalls_10.append(recall_at_k(preds_10.unsqueeze(0), target.unsqueeze(0), 10).item())
+            res_ndcgs_10.append(ndcg_at_k(preds_10.unsqueeze(0), target.unsqueeze(0), 10).item())
+            res_recalls_20.append(recall_at_k(preds_20.unsqueeze(0), target.unsqueeze(0), 20).item())
+            res_ndcgs_20.append(ndcg_at_k(preds_20.unsqueeze(0), target.unsqueeze(0), 20).item())
+
     n = max(len(combined_r10), 1)
+    n_res = max(len(res_recalls_10), 1)
     avg_orth = sum(orth_sims) / n
 
     metrics = {
-        "val/recall@10":     sum(combined_r10) / n,
-        "val/ndcg@10":       sum(combined_n10) / n,
-        "val/recall@20":     sum(combined_r20) / n,
-        "val/ndcg@20":       sum(combined_n20) / n,
+        "val/recall@10":       sum(res_recalls_10) / n_res,
+        "val/ndcg@10":         sum(res_ndcgs_10) / n_res,
+        "val/recall@20":       sum(res_recalls_20) / n_res,
+        "val/ndcg@20":         sum(res_ndcgs_20) / n_res,
+        "val/recall@10_flat":     sum(combined_r10) / n,
+        "val/ndcg@10_flat":       sum(combined_n10) / n,
+        "val/recall@20_flat":     sum(combined_r20) / n,
+        "val/ndcg@20_flat":       sum(combined_n20) / n,
         "val/recall@10_intent": sum(intent_r10) / n,
         "val/recall@10_fill":   sum(fill_r10) / n,
         "val/orth_cosine":   avg_orth,
     }
 
     logger.info("=== Inference Metrics ===")
-    logger.info(f"  Combined   Recall@10={metrics['val/recall@10']:.4f}  NDCG@10={metrics['val/ndcg@10']:.4f}")
-    logger.info(f"  Combined   Recall@20={metrics['val/recall@20']:.4f}  NDCG@20={metrics['val/ndcg@20']:.4f}")
+    logger.info(f"  Residual   Recall@10={metrics['val/recall@10']:.4f}  NDCG@10={metrics['val/ndcg@10']:.4f}")
+    logger.info(f"  Residual   Recall@20={metrics['val/recall@20']:.4f}  NDCG@20={metrics['val/ndcg@20']:.4f}")
+    logger.info(f"  Flat Comb. Recall@10={metrics['val/recall@10_flat']:.4f}  NDCG@10={metrics['val/ndcg@10_flat']:.4f}")
     logger.info(f"  Intent-only R@10={metrics['val/recall@10_intent']:.4f}  |  Fill-only R@10={metrics['val/recall@10_fill']:.4f}")
     logger.info(f"  Orthogonality |cos(h_intent, h_fill)|={avg_orth:.4f}")
 
@@ -377,7 +422,7 @@ def main(cfg: DictConfig):
 
     wandb.init(
         project=cfg.wandb.project,
-        name="full_model",
+        name=cfg.wandb.get("name", "full_model"),
         config=OmegaConf.to_container(cfg),
     )
 
