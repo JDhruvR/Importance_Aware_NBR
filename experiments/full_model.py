@@ -382,8 +382,14 @@ def run_inference(
         all_predicted_items.update(top10_idx.flatten().tolist())
 
         # Repeat vs Explore
+        # We must NOT include the target basket in the history. The input baskets go up to seq_lengths.
+        T_len = items.size(1)
+        step_indices = torch.arange(T_len, device=device).unsqueeze(0).expand(B, T_len)
+        valid_history_mask = (step_indices <= seq_lengths.unsqueeze(1)).unsqueeze(2)
+        history_item_mask = item_mask & valid_history_mask
+
         model_vocab = vocab_embeddings.shape[0]
-        history = build_history_multihot(items, item_mask, model_vocab)
+        history = build_history_multihot(items, history_item_mask, model_vocab)
         rep_target, exp_target = repeat_explore_masks(target_last, history)
 
         rep_r10_batch = recall_at_k(combined, rep_target, 10)
