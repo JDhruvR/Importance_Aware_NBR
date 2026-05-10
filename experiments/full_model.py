@@ -306,8 +306,14 @@ def run_inference(
         h_next           = out["next_basket_repr"][:, -1, :]    # (B, D)
         vocab_embeddings = model.item_embedding.embedding.weight # (V, D)
 
+        basket_mask_target = batch["basket_mask_target"].to(device)
+        targets = batch["targets"].to(device)
+
+        seq_lengths = basket_mask_target.sum(dim=1).long() - 1
+        seq_lengths = seq_lengths.clamp(min=0)
+
         for i in range(items.size(0)):
-            target = batch["target_basket"][i]
+            target = targets[i, seq_lengths[i]]
 
             # Section VI Steps 4-6: two-stage residual decode
             predicted_basket = residual_decode(
@@ -322,10 +328,15 @@ def run_inference(
             recs_10 = predicted_basket[:10]
             recs_20 = predicted_basket[:20]
 
-            recalls_10.append(recall_at_k(recs_10, target, 10))
-            ndcgs_10.append(ndcg_at_k(recs_10, target, 10))
-            recalls_20.append(recall_at_k(recs_20, target, 20))
-            ndcgs_20.append(ndcg_at_k(recs_20, target, 20))
+            preds_10 = torch.zeros_like(target)
+            preds_20 = torch.zeros_like(target)
+            preds_10[torch.tensor(recs_10, device=target.device)] = 1.0
+            preds_20[torch.tensor(recs_20, device=target.device)] = 1.0
+
+            recalls_10.append(recall_at_k(preds_10.unsqueeze(0), target.unsqueeze(0), 10).item())
+            ndcgs_10.append(ndcg_at_k(preds_10.unsqueeze(0), target.unsqueeze(0), 10).item())
+            recalls_20.append(recall_at_k(preds_20.unsqueeze(0), target.unsqueeze(0), 20).item())
+            ndcgs_20.append(ndcg_at_k(preds_20.unsqueeze(0), target.unsqueeze(0), 20).item())
 
     n = max(len(recalls_10), 1)
     metrics = {
@@ -354,7 +365,7 @@ def main(cfg: DictConfig):
 
     wandb.init(
         project=cfg.wandb.project,
-        name="full_model",
+        name=cfg.wandb.get("name", "full_model"),
         config=OmegaConf.to_container(cfg),
     )
 

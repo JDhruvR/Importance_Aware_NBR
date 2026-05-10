@@ -8,12 +8,13 @@ dataset:
 
 wandb:
   project: IMPORTANCE-AWARE-NBR
+  name: dataset_full_model
 
 trainer:
-  max_epochs: 20
+  max_epochs: 15
   reorth_every: 100
   eval_every: 3
-  mlm_mask_prob: 0.15
+  mlm_mask_prob: 0.1
 
 model:
   dim: 128
@@ -21,7 +22,7 @@ model:
   num_heads: 4
   num_encoder_layers: 2
   num_gpt_layers: 2
-  dropout: 0.22
+  dropout: 0.3
   temperature: 1.0
   k1: 2
   k2: 18
@@ -32,12 +33,12 @@ loss:
     intent: 1.0
     fill: 1.0
     orth: 0.1
-    mlm: 0.3
+    mlm: 0.1
 
 data:
   mask_token_id: 1  # Assuming 1 is used for [MASK] in your tokenizer
 
 optim:
-  lr: 0.001
+  lr: 0.0005
   weight_decay: 0.004
   clip_norm: 1.0
