@@ -4,17 +4,17 @@ max_seq_len: 30
 num_workers: 8
 
 dataset:
-  name: tafeng
+  name: dunnhumby
 
 wandb:
   project: IMPORTANCE-AWARE-NBR
   name: dataset_full_model
 
 trainer:
-  max_epochs: 15
+  max_epochs: 12
   reorth_every: 100
   eval_every: 3
-  mlm_mask_prob: 0.1
+  mlm_mask_prob: 0.05
 
 model:
   dim: 128
@@ -33,12 +33,12 @@ loss:
     intent: 1.0
     fill: 1.0
     orth: 0.1
-    mlm: 0.1
+    mlm: 0.05
 
 data:
   mask_token_id: 1  # Assuming 1 is used for [MASK] in your tokenizer
 
 optim:
-  lr: 0.0005
+  lr: 0.0003
   weight_decay: 0.004
   clip_norm: 1.0
