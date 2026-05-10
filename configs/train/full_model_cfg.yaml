@@ -4,41 +4,41 @@ max_seq_len: 30
 num_workers: 8
 
 dataset:
-  name: dunnhumby
+    name: dunnhumby
 
 wandb:
-  project: IMPORTANCE-AWARE-NBR
-  name: dataset_full_model
+    project: IMPORTANCE-AWARE-NBR
+    name: dataset_full_model
 
 trainer:
-  max_epochs: 12
-  reorth_every: 100
-  eval_every: 3
-  mlm_mask_prob: 0.0       # Disabled: MLM masking corrupts encoder input during Phase 3
+    max_epochs: 12
+    reorth_every: 100
+    eval_every: 3
+    mlm_mask_prob: 0.0
 
 model:
-  dim: 128
-  intent_dim: 32
-  num_heads: 4
-  num_encoder_layers: 2
-  num_gpt_layers: 2
-  dropout: 0.3
-  temperature: 1.0
-  k1: 2
-  k2: 18
-  tau_alpha: median
+    dim: 128
+    intent_dim: 32
+    num_heads: 4
+    num_encoder_layers: 2
+    num_gpt_layers: 2
+    dropout: 0.3
+    temperature: 1.0
+    k1: 2
+    k2: 18
+    tau_alpha: median
 
 loss:
-  weights:
-    intent: 1.0
-    fill: 1.0
-    orth: 0.1
-    mlm: 0.05
+    weights:
+        intent: 1.0
+        fill: 1.0
+        orth: 0.1
+        mlm: 0.05
 
 data:
-  mask_token_id: 1
+    mask_token_id: 1
 
 optim:
-  lr: 0.0003
-  weight_decay: 0.001
-  clip_norm: 1.0
+    lr: 0.0003
+    weight_decay: 0.004
+    clip_norm: 1.0
