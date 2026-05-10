@@ -1,0 +1,753 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{subcaption}
+\usepackage{hyperref}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\begin{document}
+\title{Not All Items Are Created Equal\\
+\vspace{0.5cm}
+\large Importance-Aware Next Basket Recommendation}
+
+\author{
+\IEEEauthorblockN{Dhruv Ramesh Joshi}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+\and
+\IEEEauthorblockN{R Ricky Roger}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+\and
+\IEEEauthorblockN{Siddharth Prashant Kini}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+\and
+\IEEEauthorblockN{Subhash Hari}
+\IEEEauthorblockA{\textit{IIIT-Bangalore}}
+}
+
+\maketitle
+
+%-----------------------------------------------------------------------
+\begin{abstract}
+Next basket recommendation predicts the full set of items a user will
+purchase next given their history. Existing methods encode each basket
+as a flat vector and treat every item as an equally important signal of
+user intent. We argue this is structurally wrong: every basket is
+organized around a small number of intent-defining items, with the
+remainder serving as peripheral fill. We propose an architecture that
+makes this distinction explicit at every stage. A BERT-style intra-basket
+encoder produces per-item contextualized representations, from which a
+learned importance head derives per-item importance weights initialized
+from a geometric leave-one-out attribution score corrected for
+population frequency. An elementwise-gated dual-stream representation
+blends a full-basket summary with an importance-weighted intent centroid.
+A causal GPT with rotary position embeddings models the temporal sequence
+of basket representations and produces a single predicted next-basket
+vector. Decoding proceeds in two conditioned stages: core items are
+predicted first via a low-rank orthogonal intent projection, and
+peripheral items are then predicted from a fill head whose query is
+explicitly conditioned on the discovered core, bridged by a
+differentiable soft intent context during training. This prevents intent
+items from crowding peripheral slots while ensuring fill predictions are
+coherent with the predicted intent.
+We evaluate on TaFeng and Dunnhumby benchmarks. On Dunnhumby,
+importance-aware components yield progressive improvements over
+frequency and vanilla baselines, validating the dual-stream design.
+On TaFeng, data sparsity limits sequence-based methods, and a
+granular analysis reveals that standard Recall metrics are dominated
+by high-frequency fill items, motivating intent-aware evaluation
+criteria for future work.
+\end{abstract}
+
+\begin{IEEEkeywords}
+next basket recommendation, purchase intent, importance scoring,
+transformer, hierarchical decoding, sequential recommendation
+\end{IEEEkeywords}
+
+
+%-----------------------------------------------------------------------
+\section{Introduction}
+Next Basket Recommendation (NBR) is a well-established problem in the recommender systems literature, with sustained research interest over the past decade. Given a sequence of historical baskets — sets of items purchased or consumed together — the goal of an NBR system is to predict the set of items a user will select in their next interaction. This setting is prominent in real-world applications such as e-commerce and grocery shopping, where users routinely purchase multiple items in a single session.
+NBR is fundamentally distinct from sequential item recommendation and session-based recommendation: unlike those settings, NBR must deal with an unordered set of multiple items as both input and output. This structural difference means that models designed for item-level recommendation are generally not directly applicable, and a dedicated body of literature has emerged to address the NBR task specifically.
+
+A user who buys chicken, basmati rice, saffron, yogurt, and cooking oil
+in one trip is not selecting five independent items. They are executing
+a meal plan. The basket is the physical realization of a latent intent.
+Remove the chicken and the basket loses its organizing purpose. Remove
+the cooking oil and the basket remains a coherent meal.
+
+This asymmetry is invisible to every existing next basket recommendation
+(NBR) system. Standard methods encode each basket as a mean or max pool
+over item embeddings and treat all items as equal contributors to the
+basket's representation. The model receives identical gradient signal
+whether it mispredicts the meal anchor or an incidental staple. At
+inference, items are decoded by scoring all catalog items against a
+single flat predicted vector and taking the top-$K$, with no mechanism
+to prevent predicting four redundant beverages or to ensure that fill
+items are coherent with whatever main intent was predicted.
+
+We propose an architecture grounded in the observation that a basket is
+not a flat bag but a hierarchical satisfaction of a purchase intent:
+a few load-bearing items define why the basket exists, and a larger
+set of fill items complete it. Our system makes this structure explicit
+in the encoder, the basket representation, and the decoder.
+
+Concretely, we contribute:
+\begin{itemize}
+\item A \textbf{geometric importance score} per item, measuring how much
+  the basket representation shifts when that item is removed, corrected
+  for population frequency to separate structural importance from rarity.
+\item A \textbf{parallel importance head} on top of the BERT encoder
+  that produces per-item importance weights, initialized from the
+  geometric score and refined during training.
+\item A \textbf{dual-stream gated basket representation} that blends the
+  full-basket CLS summary with an importance-weighted intent centroid.
+\item A \textbf{conditioned two-stage decoder}: core items are predicted
+  from a low-rank intent projection of the GPT output; fill items are
+  then predicted from a fill head whose query is conditioned on the
+  discovered core via a differentiable soft bridge, preventing intent
+  items from crowding fill slots while keeping the two stages jointly
+  trainable.
+\end{itemize}
+
+
+%-----------------------------------------------------------------------
+\section{Literature Survey}
+\label{sec:related}
+
+\subsection{Frequency and Neighbor Methods}
+
+The simplest NBR baselines rely on item frequency.
+P-TopFreq and G-TopFreq recommend the most personally or globally
+frequent items respectively. Li et al.\cite{li2023next} propose
+GP-TopFreq as a strong hybrid baseline and show that deep learning
+methods frequently fail to surpass it once repeat and explore recall are
+evaluated separately. TIFUKNN~\cite{hu2020modeling} and
+UP-CF@r~\cite{faggioli2020recency} add temporal frequency dynamics and
+recency weighting to collaborative filtering, achieving competitive
+performance primarily through accurate repeat prediction.
+
+\subsection{RNN and Graph Methods}
+
+DREAM~\cite{yu2016dynamic} introduced RNN-based temporal modeling of
+basket sequences, representing each basket as a mean pool over item
+embeddings. HRM~\cite{wang2015learning} formalized the two-level
+item-within-basket and basket-within-sequence hierarchy, the earliest
+architectural precursor to our design. DNNTSP~\cite{yu2020predicting}
+built a dynamic co-occurrence graph over items, runs graph convolution
+for intra-basket item relationships, and uses masked self-attention over
+the basket sequence. Despite its sophistication it assigns uniform
+importance to all graph nodes. Sets2Sets~\cite{hu2019sets2sets} encodes
+frequency as an explicit input feature, making it repeat-biased by
+construction. Beacon~\cite{le2019correlation} captures pairwise item
+correlations for coherent predictions but cannot represent directed
+importance structure.
+
+\subsection{Contrastive Methods}
+
+CLEA~\cite{qin2021world} is the closest prior work to our importance
+idea. It learns a binary relevance mask via Gumbel-Softmax to separate
+relevant from irrelevant basket items and trains with a contrastive
+objective. The mask is binary and learned from the prediction loss with
+no geometric grounding. Our importance score is a continuous geometric
+measurement computed independently of any task objective.
+CL4NBR~\cite{zhu2025contrastive} adds contrastive augmentation over basket
+sequences with uniform item treatment.
+
+\subsection{Transformer Methods}
+
+SASRec~\cite{kang2018self} demonstrated that causal self-attention
+substantially outperforms RNNs for sequential recommendation.
+BERT4Rec~\cite{sun2019bert4rec} applied bidirectional masked attention
+with a Cloze objective to user histories and showed that bidirectional
+context produces richer item representations. Our Layer 1 and Layer 2
+encoders are directly inspired by these two papers respectively.
+NEST is the closest architectural ancestor:
+a set-within-encounter bidirectional encoder with no positional
+encoding, followed by a causal sequence encoder with rotary position
+embeddings. We extend this topology with importance scoring,
+dual-stream fusion, and conditioned two-stage decoding.
+
+\subsection{The Repeat-Explore Problem}
+
+ReCANet~\cite{ariannezhad2022recanet} empirically established that
+over 54\% of NBR recall on grocery datasets comes from repeat items
+constituting less than 1\% of the catalog. Li et al.~\cite{li2023next}
+provided the definitive evaluation, showing no published NBR method
+properly balances repeat and explore prediction. They introduce separate
+Repeat Recall@$K$ and Explore Recall@$K$ metrics and GP-TopFreq as the
+baseline every method must beat. Our IDF-corrected importance score
+directly addresses this: high-frequency items receive a population
+penalty, preventing the model from treating habitual repeats as
+intent-defining.
+
+
+%-----------------------------------------------------------------------
+\section{Motivation}
+\label{sec:motivation}
+
+\subsection{Baskets Are Organized Around Intent}
+
+Every basket has a reason it exists. The items in a basket are not
+independent purchases but a joint realization of an underlying intent:
+make biryani, restock household staples, grab ingredients for a quick
+weeknight meal. The intent is the ground truth. The basket is a noisy
+observation of it, shaped by availability, habit, and opportunity.
+
+This reframing has a concrete consequence. The right prediction target
+is the intent underlying the next basket, from which the basket follows.
+A system that predicts the basket directly, treating it as ground truth,
+is predicting the noise alongside the signal with no mechanism to
+distinguish them.
+
+\subsection{Items Have Heterogeneous Importance}
+
+Items in a basket exist on a spectrum of intent-bearing importance.
+Some items define why the basket exists---removing them collapses its
+purpose. Others are expected given the intent but not unique to it.
+Others are peripheral and could be replaced freely without changing the
+basket's meaning. A model that assigns equal gradient signal to all
+three types will learn the signal and the noise simultaneously.
+
+\subsection{Flat Decoding Fails in Two Ways}
+
+Predicting the next basket from a single flat vector fails
+structurally. First, if intent and fill scores are combined into a
+single ranking, fill items may score weakly and intent items fill all
+top-$K$ slots---the predicted basket contains only anchors and no
+complements. Second, there is no notion of slot saturation: once a
+beverage intent is satisfied, additional beverages should score low,
+but a flat ranking has no mechanism for this.
+
+The correct structure is sequential: predict intent items first, then
+predict fill items conditioned on what the intent items reveal about the
+basket. The fill prediction must know what was predicted as intent
+before it runs.
+
+\subsection{Frequency and Importance Are Not the Same}
+
+Item frequency is not a reliable proxy for intent-bearing importance.
+High-frequency items are not always peripheral: chicken is purchased
+frequently but is genuinely load-bearing in every basket where it
+appears as a main protein. Low-frequency items are not always central:
+a rare imported product may be rare simply due to limited availability.
+A principled importance score must capture structural contribution
+independently of frequency, which motivates the IDF correction in our
+geometric score.
+
+
+%-----------------------------------------------------------------------
+\section{Core Idea}
+\label{sec:idea}
+
+The central proposal has four parts.
+
+\textbf{Geometric importance.} After a warmup phase, we measure each
+item's structural contribution to the basket representation by computing
+the Euclidean shift in the CLS output when that item is removed. This
+leave-one-out displacement, averaged across all basket appearances and
+corrected for population frequency via an IDF term, gives a stable
+global importance score $\alpha_i^{IDF}$ per item.
+
+\textbf{Importance head.} A lightweight MLP attached to the BERT
+encoder produces per-item importance weights $\alpha_i$ from the
+contextualized item representations $h_i$. It is initialized to
+reproduce $\alpha_i^{IDF}$ and then trained freely, allowing it to
+learn basket-specific context that the global score cannot capture.
+
+\textbf{Dual-stream basket representation.} Two representations are
+computed from each basket---a full-basket CLS summary and an
+importance-weighted centroid over item representations---and fused via
+a learned elementwise gate. The gate adapts as the importance head
+matures: early in training it relies on the CLS summary; as $\alpha$
+stabilizes it shifts toward the importance-filtered centroid.
+
+\textbf{Conditioned two-stage decoding.} The GPT outputs a single
+predicted next-basket vector. A learned low-rank orthogonal projection
+extracts an intent component from this vector. Core items are predicted
+from the intent component. The fill head's query is then conditioned on
+the soft weighted average of the intent scores over item embeddings---a
+differentiable bridge that carries the intent signal into fill
+prediction without requiring a hard decoding step at training time.
+
+
+%-----------------------------------------------------------------------
+\section{Methodology}
+\label{sec:method}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{image.png}
+    \caption{Overview of the proposed methodology.}
+    \label{fig:method_overview}
+\end{figure}
+
+\subsection{Item Embedding Initialization}
+
+We initialize the shared item embedding matrix
+$E \in \mathbb{R}^{|V| \times d}$ via skip-gram word2vec on the basket
+corpus, treating each basket as a sentence and each item as a token.
+Co-occurring items are initialized nearby in $\mathbb{R}^d$. $E$ is
+fully trainable throughout all phases.
+
+\subsection{Intra-Basket Encoder with Importance Head}
+
+Each basket $B_t = \{i_1, \ldots, i_K\}$ is encoded by a BERT-style
+transformer. A learned CLS token is prepended and the sequence is
+embedded:
+\begin{equation}
+X = [e_{\text{CLS}},\ E[i_1],\ \ldots,\ E[i_K]] \in \mathbb{R}^{(K+1) \times d}
+\end{equation}
+
+We apply $L_1$ layers of full bidirectional self-attention with no
+positional encoding and no causal mask.
+No positional encoding is used because baskets are unordered sets.
+No causal mask is used because every item should attend to every other
+item; intra-basket structure is fully bidirectional. The output is
+$[h_{\text{CLS}}, h_1, \ldots, h_K]$.
+
+A parallel importance head, a two-layer MLP with sigmoid output,
+maps each item's contextualized representation to an importance weight:
+\begin{equation}
+\alpha_i = \sigma\!\left(W_2\, \operatorname{GELU}(W_1 h_i + b_1) + b_2\right) \in [0,1]
+\end{equation}
+
+An auxiliary masked language modeling loss trains the encoder to
+reconstruct randomly masked items from context:
+\begin{equation}
+\mathcal{L}_{\text{MLM}} = \operatorname{CE}\!\left(E\, h_k^{\text{masked}},\ i_k^{\text{true}}\right)
+\end{equation}
+
+\subsection{Importance Score Initialization}
+
+After a warmup phase, we freeze the BERT encoder and compute a
+per-item global importance score. For each item $i$ in each training
+basket $B_t$ we measure the shift in the CLS output when $i$ is
+removed:
+\begin{equation}
+\delta(i, B_t) = \|h_{\text{CLS}}(B_t) - h_{\text{CLS}}(B_t \setminus \{i\})\|_2
+\end{equation}
+
+We normalize within each basket and aggregate across all appearances:
+\begin{align}
+\hat{\delta}(i, B_t) &= \frac{\delta(i, B_t)}{\sum_{j \in B_t} \delta(j, B_t)} \\
+\bar{\delta}_i        &= \frac{1}{|\{(u,t):i \in B_t\}|} \sum_{(u,t):\,i \in B_t} \hat{\delta}(i, B_t)
+\end{align}
+
+An IDF correction separates structural importance from population
+frequency:
+\begin{equation}
+\alpha_i^{IDF} = \bar{\delta}_i \cdot \log\frac{N}{df_i}
+\end{equation}
+
+The importance head is then pre-trained to reproduce these scores
+via a mean-squared initialization loss before main training begins.
+
+\subsection{Dual-Stream Gated Basket Representation}
+
+Using the BERT outputs and the importance weights we construct two
+basket-level representations:
+\begin{align}
+b_t^{\text{full}} &= h_{\text{CLS}} \\
+b_t^{\text{core}} &= \frac{\sum_k \alpha_{i_k}\, h_k}{\sum_k \alpha_{i_k}}
+\end{align}
+
+An elementwise gate fuses them:
+\begin{align}
+g_t &= \sigma\!\left(W_g [b_t^{\text{full}};\, b_t^{\text{core}}]\right) \in [0,1]^d \\
+b_t &= g_t \odot b_t^{\text{full}} + (1 - g_t) \odot b_t^{\text{core}}
+\end{align}
+
+\subsection{Inter-Basket Causal GPT}
+
+The sequence $(b_1, b_2, \ldots, b_T)$ is fed into a causal GPT with
+$L_2$ transformer layers. Rotary position embeddings (RoPE) are applied
+to query and key vectors only:
+\begin{equation}
+A = \operatorname{softmax}\!\left(\frac{\operatorname{RoPE}(Q)\,\operatorname{RoPE}(K)^\top}{\sqrt{d}} + M_{\text{causal}}\right)
+\end{equation}
+
+The output at the final position is $\hat{h}_{T+1} \in \mathbb{R}^d$, the predicted
+next-basket representation.
+
+\subsection{Orthogonal Intent-Fill Decomposition}
+
+$\hat{h}_{T+1}$ contains mixed signal. We separate it via a learned low-rank orthogonal projection
+$P \in \mathbb{R}^{d \times d_k}$ ($d_k < d$) with orthonormal columns
+($P^\top P = I_{d_k}$):
+\begin{align}
+\hat{h}^{\text{intent}} &= PP^\top \hat{h}_{T+1} \\
+\hat{h}^{\text{fill}}   &= \hat{h}_{T+1} - PP^\top \hat{h}_{T+1}
+\end{align}
+
+Orthonormality is enforced via periodic Gram-Schmidt
+re-orthonormalization and an orthogonality regularizer
+$\mathcal{L}_{\text{orth}} = \|\hat{h}^{\text{intent}} \cdot
+\hat{h}^{\text{fill}}\|^2$.
+
+\subsection{Conditioned Two-Stage Decoding}
+\label{subsec:decode}
+
+The core design choice in our decoder is that fill prediction is
+conditioned on intent prediction rather than run in parallel. Combining
+intent and fill scores additively would allow intent items to dominate
+all $K$ output slots when fill scores are weak. Instead we predict
+$K_1$ core items first, then predict $K_2$ fill items whose query has
+been shifted by the discovered intent.
+
+\paragraph{Stage 1 --- Core item scoring.}
+Items are scored against the intent component:
+\begin{equation}
+s_i^{\text{intent}} = e_i \cdot \hat{h}^{\text{intent}}
+\end{equation}
+
+During training, a differentiable soft intent context is constructed
+via a temperature-scaled softmax over all item scores, serving as a
+differentiable proxy for the hard top-$K_1$ selection:
+\begin{equation}
+\tilde{c} = \sum_{i \in V} \operatorname{softmax}_\tau(s^{\text{intent}})_i \cdot e_i \in \mathbb{R}^d
+\end{equation}
+
+\paragraph{Stage 2 --- Conditioned fill scoring.}
+The fill query is shifted toward the embedding neighbourhood of the
+predicted intent by a learned linear map $W_{\text{cond}} \in \mathbb{R}^{d \times d}$:
+\begin{equation}
+\hat{h}^{\text{fill} \mid \text{intent}} = \operatorname{LN}\!\left(\hat{h}^{\text{fill}} + W_{\text{cond}}\, \tilde{c}\right)
+\end{equation}
+
+Fill item scores are then:
+\begin{equation}
+s_j^{\text{fill}\mid\text{intent}} = e_j \cdot \hat{h}^{\text{fill}\mid\text{intent}}
+\end{equation}
+
+The differentiable bridge $\tilde{c}$ means that gradients from
+$\mathcal{L}_{\text{fill}}$ flow back through $W_{\text{cond}}$,
+through $\tilde{c}$, and into $s^{\text{intent}}$, jointly training
+both stages. The intent head is incentivized to produce representations
+that are useful not only for core prediction but also for conditioning
+fill prediction.
+
+\subsection{Training Objective}
+
+The ground-truth basket is partitioned using a threshold $\tau_\alpha$
+on $\alpha^{IDF}$:
+\begin{equation}
+C^*_{T+1} = \{i \in B_{T+1} : \alpha_i^{IDF} > \tau_\alpha\},\quad
+F^*_{T+1} = B_{T+1} \setminus C^*_{T+1}
+\end{equation}
+
+The intent loss is weighted by $\alpha^{IDF}$:
+\begin{equation}
+\mathcal{L}_{\text{intent}} = -\frac{1}{T}\sum_t \sum_j \alpha_j^{IDF}
+  \bigl[y_{t,j}\log\sigma(s_j^{\text{intent}})
+       + (1-y_{t,j})\log(1-\sigma(s_j^{\text{intent}}))\bigr]
+\end{equation}
+
+The fill loss is computed on the conditioned fill scores with uniform
+item weights:
+\begin{equation}
+\mathcal{L}_{\text{fill}} = -\frac{1}{T}\sum_t
+  \sum_{j \in F^*_{t+1}}
+  \bigl[y_{t,j}\log\sigma(s_j^{\text{fill}\mid\text{intent}})
+       + (1-y_{t,j})\log(1-\sigma(s_j^{\text{fill}\mid\text{intent}}))\bigr]
+\end{equation}
+
+The total loss is:
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\text{intent}}
+            + \lambda\,\mathcal{L}_{\text{fill}}
+            + \gamma\,\mathcal{L}_{\text{orth}}
+            + \eta\,\mathcal{L}_{\text{MLM}}
+\end{equation}
+
+\subsection{Training Schedule}
+Training proceeds in four phases. In \textbf{Phase 0}, $E$ is
+initialized via skip-gram. In \textbf{Phase 1} (warmup), BERT, GPT,
+and the gated fusion are trained with uniform BCE; the importance head
+is frozen. In \textbf{Phase 2}, BERT is frozen and $\alpha^{IDF}$
+scores are computed via the leave-one-out passes; the importance head
+is pre-trained to reproduce them. In \textbf{Phase 3}, all components are unfrozen and trained jointly with the full loss. To prevent the randomly initialized Two-Stage Decoder from corrupting the converged sequence representations (catastrophic forgetting), the backbone is frozen for the first 3 epochs of Phase 3.
+
+%-----------------------------------------------------------------------
+\section{Inference}
+\label{sec:inference}
+
+At inference time no gradients are computed and the soft intent context
+$\tilde{c}$ is replaced by its hard counterpart. The full procedure
+for a user with basket history $(B_1, \ldots, B_T)$ is as follows.
+
+\paragraph{Step 1 --- Encode history.}
+Each past basket $B_j$ is passed through the BERT encoder and
+importance head to produce $h_{\text{CLS}}^j$, $\{h_k^j\}$, and
+$\{\alpha_{i_k}^j\}$. The dual-stream gated fusion yields one
+basket vector per timestep.
+
+\paragraph{Step 2 --- Predict next basket representation.}
+The sequence $(b_1, \ldots, b_T)$ is passed through the causal GPT.
+The output at the final position is the predicted next-basket
+representation.
+
+\paragraph{Step 3 --- Decompose into intent and fill.}
+The learned projection $P$ splits $\hat{h}_{T+1}$ into orthogonal
+components $\hat{h}^{\text{intent}}$ and $\hat{h}^{\text{fill}}$.
+
+\paragraph{Step 4 --- Core item decoding via residual loop.}
+Initialize $r_0^{\text{intent}} = \hat{h}^{\text{intent}}$ and
+$\hat{C} = \varnothing$. For $k = 1, \ldots, K_1$:
+\begin{align}
+\hat{i}_k &= \operatorname*{arg\,max}_{i \notin \hat{C}}\;
+             e_i \cdot r_{k-1}^{\text{intent}} \\
+r_k^{\text{intent}} &= r_{k-1}^{\text{intent}} - PP^\top e_{\hat{i}_k} \\
+\hat{C} &\leftarrow \hat{C} \cup \{\hat{i}_k\}
+\end{align}
+
+Each selected item's projected embedding is subtracted from the
+residual before the next query. Items that point in the same direction
+as an already-selected item score low against the updated residual,
+preventing redundant picks without any explicit diversity constraint.
+
+\paragraph{Step 5 --- Condition fill query on discovered core.}
+Compute the mean embedding of the predicted core set:
+\begin{equation}
+\bar{e}_{\hat{C}} = \frac{1}{K_1} \sum_{k=1}^{K_1} e_{\hat{i}_k}
+\end{equation}
+
+Shift the fill component toward the discovered intent neighbourhood:
+\begin{equation}
+\hat{h}^{\text{fill} \mid \text{intent}}
+  = \operatorname{LN}\!\left(\hat{h}^{\text{fill}}
+    + W_{\text{cond}}\,\bar{e}_{\hat{C}}\right)
+\end{equation}
+
+\paragraph{Step 6 --- Fill item decoding via conditioned residual loop.}
+Initialize $r_0^{\text{fill}} = \hat{h}^{\text{fill} \mid \text{intent}}$.
+For $k = 1, \ldots, K_2$:
+\begin{align}
+\hat{i}_{K_1+k} &= \operatorname*{arg\,max}_{i \notin \hat{C}}\;
+                   e_i \cdot r_{k-1}^{\text{fill}} \\
+r_k^{\text{fill}} &= r_{k-1}^{\text{fill}}
+                   - (I - PP^\top) e_{\hat{i}_{K_1+k}} \\
+\hat{C} &\leftarrow \hat{C} \cup \{\hat{i}_{K_1+k}\}
+\end{align}
+
+\paragraph{Final output.}
+The predicted basket is:
+\begin{equation}
+\hat{B}_{T+1} = \hat{C}, \quad |\hat{B}_{T+1}| = K_1 + K_2
+\end{equation}
+
+
+%-----------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Datasets}
+
+We evaluate on two standard grocery benchmarks commonly used in NBR literature.
+
+\begin{table}[h]
+\centering
+\caption{Dataset statistics after preprocessing (min 3 baskets/user, min 5 item frequency).}
+\label{tab:datasets}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Dataset} & \textbf{Users} & \textbf{Items} & \textbf{Baskets} & \textbf{Avg. Size} \\
+\midrule
+Dunnhumby  & 48,125 & 4,997 & 25,193,229 & 6.65 \\
+TaFeng     & 29,197 & 15,743 &    795,321 & 6.87 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We evaluate on two grocery benchmarks spanning contrasting purchase regimes.
+
+\textbf{Dunnhumby} is a retail loyalty-card transaction dataset collected from a
+UK grocery chain. Transactions span multiple months and are segmented into
+baskets by unique basket identifier within each shopping date. After filtering,
+it contains 48,125 users and 4,997 items — the smallest item vocabulary of the
+two datasets — but the longest user histories by far, with a median of 41
+baskets per user (mean 78.75, max 1,157). This makes Dunnhumby particularly
+suited to evaluating long-horizon sequential modeling.
+
+\textbf{TaFeng} is a Taiwanese grocery dataset covering four
+months of transactions. Same-day purchases by the same customer are grouped into
+a single basket, and basket order is derived from sorted transaction dates.
+After filtering, it retains 29,197 users and 15,743 items. User histories are
+notably sparse — median 2 baskets per user, mean 3.97 — making TaFeng the most
+challenging dataset for sequence-based methods that rely on long purchase
+histories to infer intent.
+
+We preprocess both the TaFeng and Dunnhumby datasets into a unified basket-sequence format to ensure consistent training across models. For both datasets, raw transaction records were cleaned by removing incomplete entries, filtering out infrequent items and users with insufficient purchase history, and remapping customer and product identifiers into contiguous integer indices for efficient embedding lookup. In TaFeng, all purchases made by a customer on the same day were grouped into a single basket, and basket sequences were ordered chronologically by transaction date.
+
+For Dunnhumby, transactions were grouped using basket IDs and ordered using purchase date and basket identifiers to preserve temporal sequence. The processed outputs were stored as item-level (user\_id, order\_idx, item\_id) triples in parquet format, allowing dynamic reconstruction of variable-length baskets during training while supporting padded tensor generation for sequential recommendation models.
+
+
+\subsection{Baselines}
+We compare against the following baselines:
+\begin{itemize}
+\item \textbf{G-TopFreq}: Recommends globally most frequent items.
+\item \textbf{Dream}: RNN-based temporal modeling of
+basket sequences.
+\item \textbf{NBR-Vanilla}: Our encoder-GPT pipeline with no importance scores being taken into consideration.
+\item \textbf{Dual-Stream (no two-stage decode)}: Our encoder-GPT pipeline with importance scores and standard BCE loss. No intent-fill decomposition.
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+We report \textbf{Recall@$K$} and \textbf{NDCG@$K$} evaluated at $K \in \{10, 20\}$.
+
+\subsection{Implementation Details}
+All models use embedding dimension $d = 128$, intent dimension $d_k = 32$, $L_1 = 2$ BERT layers, $L_2 = 2$ GPT layers, 4 attention heads, dropout $0.22$, and are trained with AdamW ($\text{lr}=10^{-3}$, weight decay $4 \times 10^{-3}$). Phase 3 uses $K_1 = 2$ core items and $K_2 = 18$ fill items. Loss weights are $\lambda = 1.0$, $\gamma = 0.1$, $\eta = 0.3$. Gram-Schmidt re-orthonormalization is applied every 100 steps. Training is run for 12 epochs with validation every epoch. All experiments are run on a single NVIDIA GPU with PyTorch.
+
+
+%-----------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\subsection{Main Results}
+
+\begin{table*}[t]
+\centering
+\caption{Next basket recommendation performance on TaFeng and Dunnhumby. Best results are \textbf{bolded}. All metrics are averaged over the test set. $^\dagger$R@20 for the Full Model on Dunnhumby was not computed in the current experimental run.}
+\label{tab:main_results}
+\begin{tabular}{l|cccc|cccc}
+\toprule
+& \multicolumn{4}{c|}{\textbf{Dunnhumby}} & \multicolumn{4}{c}{\textbf{TaFeng}} \\
+\textbf{Method} & R@10 & R@20 & N@10 & N@20 & R@10 & R@20 & N@10 & N@20 \\
+\midrule
+G-TopFreq       & 0.0982 & 0.1264 & 0.1050 & 0.1192 & 0.0831 & 0.1114 & 0.0864 & 0.0961 \\
+DREAM           & 0.0950 & 0.1264 & 0.1036 & 0.1205 & 0.1134 & \textbf{0.1463} & 0.1022 & \textbf{0.1149} \\
+\midrule
+Vanilla-NBR     & 0.1882 & 0.2381 & 0.2109 & 0.2154 & 0.0832 & 0.1092 & 0.0765 & 0.0844 \\
+Dual-Stream     & \textbf{0.2166} & \textbf{0.2819} & \textbf{0.2384} & \textbf{0.2427} & 0.0699 & 0.0916 & 0.0599 & 0.0663 \\
+Full Model (Flat Comb) & 0.1989 & ---$^\dagger$ & 0.2167 & 0.2223 & 0.0838 & ---$^\dagger$ & 0.0747 & 0.0833 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Table~\ref{tab:main_results} presents the main results. On Dunnhumby, the Full Model evaluated via the flat combined top-K logits achieves a Recall@10 of 0.1989, successfully outperforming the standard Vanilla NBR baseline (0.1882). This validates that the multi-head loss and orthogonal projection improve the underlying representations compared to a standard transformer. However, the simpler Dual-Stream architecture remains superior (0.2166), suggesting that the hard intent/fill partition introduces constraints that limit overall recall.
+
+Conversely, on the much sparser TaFeng dataset, the Full Model (Recall@10=0.0838) successfully outperforms both the Vanilla NBR (0.0832) and the Dual-Stream variant (0.0699). While data sparsity (median 2 baskets per user) still causes all sequence-based methods to underperform the personal frequency baseline DREAM (0.1134), the fact that the Full Model beats the other transformer variants indicates that explicit intent/fill subspace partitioning provides a stronger gradient signal on sparse histories than a simple gated fusion.
+
+\subsection{Training Dynamics and Catastrophic Forgetting}
+
+Jointly training the full architecture poses significant optimization challenges. In our initial experiments, we observed catastrophic forgetting when the pre-trained GPT backbone was jointly fine-tuned with a randomly initialized Two-Stage Decoder projection matrix $\mathbf{P}$. The massive initial error gradients flowing backwards through $\mathbf{P}$ shattered the pre-trained sequence representations within the first few batches, dropping Recall@10 to 0.044.
+
+To stabilize training, we employ a phased unfreezing strategy. The entire sequence backbone (Encoder, Fusion, and GPT) is frozen for the first 3 epochs of Phase 3, allowing the low-rank projection to safely learn the orthogonal mapping. At epoch 4, the backbone is unfrozen for joint fine-tuning, allowing the model to smoothly climb to its final performance.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\columnwidth]{train_loss.png}
+\caption{Phase 3 training loss decomposition over steps. The intent and fill losses decrease steadily while the orthogonality loss remains near zero, confirming that $P$ maintains near-orthonormal columns.}
+\label{fig:training_loss}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.9\columnwidth]{val@10.png}
+\caption{Validation Recall@10 evaluated every epoch during end to end training.}
+\label{fig:val_recall}
+\end{figure}
+
+
+%-----------------------------------------------------------------------
+\subsection{Ablation Study}
+
+To isolate the contribution of each component, we evaluate two ablated variants against the full model.
+
+\textbf{Vanilla NBR.} Removes all importance-aware machinery. A standard BERT encoder and GPT decoder rank items via simple dot-product similarity.
+
+\textbf{NBR + Importance Fusion (Dual-Stream).} Introduces the importance head and gated fusion but stops short of the intent/fill decomposition. The resulting next-basket representation is scored against all items via dot product, with no subspace decomposition.
+
+\textbf{Full Model (Ours).} Adds the orthogonal intent/fill projection $\mathbf{P}$, the $\alpha_{\text{IDF}}$-weighted intent loss, the conditioned fill loss, and the two-stage decoder.
+
+\begin{table}[h]
+\centering
+\caption{Ablation study. Each row adds one set of components over the previous.}
+\label{tab:ablation}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Variant} & \textbf{Importance} & \textbf{Intent/Fill} & \textbf{Residual} \\
+                 & \textbf{Fusion}     & \textbf{Decomp.}     & \textbf{Decode}   \\
+\midrule
+Vanilla NBR                  & \texttimes & \texttimes & \texttimes \\
+NBR + Importance Fusion      & \checkmark & \texttimes & \texttimes \\
+Full Model (Ours)            & \checkmark & \checkmark & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dual-Stream Gate Analysis}
+
+\begin{table}[h]
+\centering
+\caption{Average gate value $\bar{g}$ across validation baskets, measuring the model's learned reliance on full-basket CLS ($g \to 1$) versus importance-weighted core ($g \to 0$).}
+\label{tab:gate}
+\begin{tabular}{lc}
+\toprule
+\textbf{Dataset} & $\bar{g}$ \\
+\midrule
+TaFeng    & 0.26 \\
+Dunnhumby & 0.10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gate values confirm the expected adaptive behaviour. On Dunnhumby, where long user histories (median 41 baskets) allow the importance head to stabilise, the gate strongly favours the importance-weighted core stream ($\bar{g} = 0.10$). On TaFeng, where sparse histories limit importance calibration, the gate is more conservative ($\bar{g} = 0.26$), retaining more reliance on the full CLS summary.
+
+\subsection{Importance Score Distribution \& Core vs.\ Fill Accuracy}
+
+Table~\ref{tab:importance_stats} summarises the $\alpha^{IDF}$ distributions across all datasets. The right-skewed distribution (mean $>$ median) is consistent with our hypothesis that a small number of load-bearing items dominate each basket while the majority serve as peripheral fill. Importance scores were computed for Instacart in addition to the two evaluation datasets to validate the generality of the score distribution; model training and evaluation were conducted on Dunnhumby and TaFeng only.
+
+By setting the target partitioning threshold $\tau_\alpha$ to the median of the dataset, we ensured an equal 50/50 split of the vocabulary into core and fill items. However, a granular analysis of the Full Model reveals a stark asymmetry in prediction accuracy. On Dunnhumby, the fill head alone achieves a Recall@10 of 0.1874, accounting for 94\% of the combined model's total recall (0.1989). In contrast, the intent head achieves a Recall@10 of only 0.0610.
+
+This validates our hypothesis regarding the $\alpha^{IDF}$ distribution: the fill items are high-frequency staples that are highly predictable and dominate standard recommendation metrics. The core intent items (e.g., specialty Champagne) are rare, idiosyncratic, and difficult to predict from sequence context alone, motivating intent-specific evaluation criteria as future work.
+
+In contrast, on the highly sparse TaFeng dataset, the intent and fill heads contribute almost equally to the Full Model's performance (Recall@10 of 0.0661 and 0.0712, respectively). Because TaFeng has far fewer recurring high-frequency staples, the ``intent'' items make up a much more substantial and predictable portion of the basket evaluation. This explains why the Full Model architecture shines on TaFeng compared to the flat Dual-Stream variant.
+
+\begin{table}[h]
+\centering
+\caption{$\alpha^{IDF}$ distribution statistics across datasets. Instacart scores are reported for distributional analysis; model evaluation was conducted on Dunnhumby and TaFeng.}
+\label{tab:importance_stats}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Dataset} & \textbf{Items} & \textbf{Mean} & \textbf{Std} & \textbf{Q1} & \textbf{Median} & \textbf{Q3} \\
+\midrule
+Instacart  & 47{,}975 & 1.117 & 0.511 & 0.807 & 1.021 & 1.298 \\
+Dunnhumby  &  4{,}997 & 1.149 & 0.579 & 0.808 & 0.986 & 1.283 \\
+TaFeng     & 15{,}743 & 1.674 & 1.001 & 1.040 & 1.422 & 1.994 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%-----------------------------------------------------------------------
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Strengths.}
+The importance-aware architecture offers structural advantages over flat NBR methods. The geometric importance score provides a principled, task-independent measurement of item contribution that does not conflate frequency with structural importance. The dual-stream gate learns to adaptively balance full-basket and importance-filtered representations, with gate values confirming the expected behaviour across datasets with contrasting history lengths.
+
+\paragraph{Hierarchical Decoding vs Standard Metrics.}
+The empirical underperformance of the 6-step Residual Decode algorithm (Recall@10 = 0.1588) compared to the flat combined approach (Recall@10 = 0.1989) exposes a fundamental misalignment between our hierarchical decoding strategy and standard recommendation metrics. Because core intent items are rare and difficult to predict, forcing the model to allocate its top $K_1$ prediction slots exclusively to intent items wastes ranking real estate that could be used for highly predictable, high-frequency fill items. Consequently, while the orthogonal subspace projection successfully learns to separate intent from fill (enforced by the orthogonality regularizer), standard Recall metrics disproportionately reward predicting the fill space.
+
+\paragraph{Dataset Dependence.}
+On Dunnhumby, importance-aware components yield progressive gains: the Dual-Stream model improves over Vanilla-NBR (R@10: $0.188 \to 0.216$), consistent with richer basket representations emerging from long user histories (median 41 baskets). On TaFeng, data sparsity (median 2 baskets per user) causes all sequence models to underperform frequency baselines, suggesting that a minimum history length is required for learned sequential representations to be effective.
+
+%-----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+We presented an intent-aware next basket recommendation system that makes explicit the asymmetry between load-bearing and peripheral items. A geometric importance score corrected for population frequency initializes a learned importance head that shapes both the basket representation and the training signal. A dual-stream gated encoder produces basket representations that adaptively blend full-basket context with an intent-weighted centroid, with gate analysis confirming the mechanism functions as designed. While the orthogonal projection successfully separates intent from fill, empirical results demonstrate that standard recommendation metrics are overwhelmingly dominated by high-frequency peripheral items, challenging the utility of strict hierarchical decoding under current evaluation protocols. Future work will evaluate with separate Repeat Recall@$K$ and Explore Recall@$K$ metrics aligned with our intent-aware design, and will investigate temperature annealing to bridge the soft-to-hard gap between training and inference.
+
+%-----------------------------------------------------------------------
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

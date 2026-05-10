@@ -37,7 +37,7 @@ from nbr.models.decoder import residual_decode
 from nbr.losses import total_loss
 from nbr.utils.seed import seed_everything
 from nbr.utils.device import get_device
-from nbr.metrics.ranking import recall_at_k, ndcg_at_k
+from nbr.metrics.ranking import recall_at_k, ndcg_at_k, repeat_explore_masks, build_history_multihot, mrr_at_k
 import torch.nn.functional as F
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -328,6 +328,11 @@ def run_inference(
     intent_r10, fill_r10 = [], []
     orth_sims = []
     
+    # Advanced Diagnostics (Explore/Repeat, MRR, Coverage)
+    exp_r10, rep_r10 = [], []
+    combined_mrr, intent_mrr = [], []
+    all_predicted_items = set()
+    
     # Residual decode metrics
     res_recalls_10, res_ndcgs_10 = [], []
     res_recalls_20, res_ndcgs_20 = [], []
@@ -368,6 +373,31 @@ def run_inference(
         intent_r10.append(recall_at_k(intent_logits, target_last, 10).mean().item())
         fill_r10.append(recall_at_k(fill_logits, target_last, 10).mean().item())
 
+        # --- Advanced Diagnostics ---
+        # MRR
+        combined_mrr.append(mrr_at_k(combined, target_last, 10).mean().item())
+        intent_mrr.append(mrr_at_k(intent_logits, target_last, 10).mean().item())
+
+        # Coverage
+        top10_idx = torch.topk(combined, k=min(10, combined.shape[-1]), dim=-1).indices
+        all_predicted_items.update(top10_idx.flatten().tolist())
+
+        # Repeat vs Explore
+        model_vocab = vocab_embeddings.shape[0]
+        history = build_history_multihot(items, item_mask, model_vocab)
+        rep_target, exp_target = repeat_explore_masks(target_last, history)
+
+        rep_r10_batch = recall_at_k(combined, rep_target, 10)
+        exp_r10_batch = recall_at_k(combined, exp_target, 10)
+        
+        valid_rep = (rep_target.sum(dim=-1) > 0)
+        valid_exp = (exp_target.sum(dim=-1) > 0)
+        
+        if valid_rep.any():
+            rep_r10.append(rep_r10_batch[valid_rep].mean().item())
+        if valid_exp.any():
+            exp_r10.append(exp_r10_batch[valid_exp].mean().item())
+
         # Orthogonality diagnostic
         h_intent = out["intent_repr"][idx, seq_lengths, :]
         h_fill   = out["fill_repr"][idx, seq_lengths, :]
@@ -403,7 +433,10 @@ def run_inference(
 
     n = max(len(combined_r10), 1)
     n_res = max(len(res_recalls_10), 1)
+    n_rep = max(len(rep_r10), 1)
+    n_exp = max(len(exp_r10), 1)
     avg_orth = sum(orth_sims) / n
+    coverage = len(all_predicted_items) / float(vocab_embeddings.shape[0])
 
     metrics = {
         "val/recall@10":       sum(res_recalls_10) / n_res,
@@ -417,6 +450,11 @@ def run_inference(
         "val/recall@10_intent": sum(intent_r10) / n,
         "val/recall@10_fill":   sum(fill_r10) / n,
         "val/orth_cosine":   avg_orth,
+        "val/mrr@10_flat":        sum(combined_mrr) / n,
+        "val/mrr@10_intent":      sum(intent_mrr) / n,
+        "val/repeat_recall@10":   sum(rep_r10) / n_rep if rep_r10 else 0.0,
+        "val/explore_recall@10":  sum(exp_r10) / n_exp if exp_r10 else 0.0,
+        "val/coverage@10":        coverage,
     }
 
     logger.info("=== Inference Metrics ===")
@@ -425,6 +463,8 @@ def run_inference(
     logger.info(f"  Flat Comb. Recall@10={metrics['val/recall@10_flat']:.4f}  NDCG@10={metrics['val/ndcg@10_flat']:.4f}")
     logger.info(f"  Intent-only R@10={metrics['val/recall@10_intent']:.4f}  |  Fill-only R@10={metrics['val/recall@10_fill']:.4f}")
     logger.info(f"  Orthogonality |cos(h_intent, h_fill)|={avg_orth:.4f}")
+    logger.info(f"  [ADV] Explore Recall={metrics['val/explore_recall@10']:.4f}  |  Repeat Recall={metrics['val/repeat_recall@10']:.4f}")
+    logger.info(f"  [ADV] Catalog Coverage={metrics['val/coverage@10']:.2%}  |  Intent MRR={metrics['val/mrr@10_intent']:.4f}")
 
     return metrics
 

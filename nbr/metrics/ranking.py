@@ -26,6 +26,32 @@ def recall_at_k(preds: torch.Tensor, targets: torch.Tensor, k: int) -> torch.Ten
     return hits / denom
 
 
+def mrr_at_k(preds: torch.Tensor, targets: torch.Tensor, k: int) -> torch.Tensor:
+    """Compute MRR@K for a batch.
+
+    Args:
+        preds: (B, V) scores (higher is better).
+        targets: (B, V) multi-hot ground truth.
+        k: cutoff.
+
+    Returns:
+        (B,) tensor with mrr@k per sample.
+    """
+    if k <= 0:
+        raise ValueError("k must be > 0")
+    k_eff = min(k, preds.shape[-1])
+    topk = torch.topk(preds, k=k_eff, dim=-1).indices
+    rel = torch.gather(targets, 1, topk)
+    
+    hits = rel > 0
+    first_hit_idx = hits.long().argmax(dim=1)
+    has_hit = hits.any(dim=1)
+    
+    mrr = torch.zeros(preds.shape[0], device=preds.device)
+    mrr[has_hit] = 1.0 / (first_hit_idx[has_hit].float() + 1.0)
+    return mrr
+
+
 def ndcg_at_k(preds: torch.Tensor, targets: torch.Tensor, k: int) -> torch.Tensor:
     """Compute NDCG@K for a batch.
 
