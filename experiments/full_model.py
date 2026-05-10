@@ -33,7 +33,6 @@ from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 
 from nbr.models.full_model import IntentAwareNBR
-from nbr.models.decoder import residual_decode
 from nbr.losses import total_loss
 from nbr.train.data_module import BasketDataModule
 from nbr.utils.seed import seed_everything
@@ -42,6 +41,18 @@ from nbr.metrics.ranking import recall_at_k, ndcg_at_k
 import torch.nn.functional as F
 
 PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _log_partition_stats(alpha_idf: torch.Tensor, tau_alpha: float) -> None:
+    """Log alpha_idf partition diagnostics before training."""
+    core_frac = (alpha_idf > tau_alpha).float().mean().item()
+    logger.info(f"Partition diagnostics: tau_alpha={tau_alpha}")
+    logger.info(f"  Items with alpha_idf > tau: {core_frac:.2%} (core), {1-core_frac:.2%} (fill)")
+    logger.info(f"  alpha_idf stats: mean={alpha_idf.mean():.4f}, std={alpha_idf.std():.4f}, "
+                f"min={alpha_idf.min():.4f}, max={alpha_idf.max():.4f}")
+    wandb.run.summary["partition/core_fraction"] = core_frac
+    wandb.run.summary["partition/alpha_mean"] = alpha_idf.mean().item()
+    wandb.run.summary["partition/alpha_std"] = alpha_idf.std().item()
 
 
 # ============================================================================ #
@@ -264,7 +275,7 @@ def phase3_joint_training(
 
 
 # ============================================================================ #
-#  Inference — Section VI six-step two-stage residual decode                   #
+#  Inference — flat top-K from combined/intent/fill logits                     #
 # ============================================================================ #
 
 @torch.no_grad()
@@ -275,69 +286,81 @@ def run_inference(
     cfg: DictConfig,
 ) -> dict:
     """
-    Section VI inference: encode each user's history, then run the two-stage
-    residual decode to produce the predicted next basket.
+    Evaluate using flat top-K from the model's logit heads.
 
-    Steps 1-3 are performed by model.forward() which returns next_basket_repr.
-    Steps 4-6 are performed by residual_decode() using next_basket_repr[:, -1, :].
+    Logs three sets of metrics to diagnose which head is learning:
+      - combined (intent + fill logits)  — what matters for overall performance
+      - intent-only                      — is the projection learning core items?
+      - fill-only                        — is the fill head learning peripheral items?
 
-    The decoded basket contains K1 core items (Stage 1) + K2 fill items (Stage 2).
-    Both @10 and @20 metrics are evaluated from a single K1+K2=20 decode pass.
+    Also logs the average cosine similarity between intent and fill representations
+    as a live orthogonality diagnostic.
     """
-    logger.info("Running Section VI two-stage residual-decode inference...")
+    logger.info("Running inference (flat top-K diagnostic)...")
     model.eval()
 
-    k1 = cfg.model.k1   # core items  (Stage 1, intent subspace)
-    k2 = cfg.model.k2   # fill items  (Stage 2, conditioned on discovered core)
+    basket_mask_key = "basket_mask_target"
 
-    recalls_10, ndcgs_10 = [], []
-    recalls_20, ndcgs_20 = [], []
+    combined_r10, combined_n10 = [], []
+    combined_r20, combined_n20 = [], []
+    intent_r10, fill_r10 = [], []
+    orth_sims = []
 
     for batch in val_loader:
         items       = batch["items"].to(device)
         item_mask   = batch["item_mask"].to(device)
         basket_mask = batch["basket_mask"].to(device)
+        bm_target   = batch[basket_mask_key].to(device)
+        targets     = batch["targets"].to(device)
 
         out = model(items, item_mask, basket_mask)
 
-        # next_basket_repr[:, -1, :] is h_{T+1} — the GPT output at the final
-        # position, i.e. the prediction of the next basket given all history.
-        # This is NOT cls_repr, which encodes each observed past basket.
-        h_next           = out["next_basket_repr"][:, -1, :]    # (B, D)
-        vocab_embeddings = model.item_embedding.embedding.weight # (V, D)
+        # Use the last valid target position per user (same as dual-stream eval)
+        seq_lengths = bm_target.sum(dim=1).long() - 1
+        B = items.size(0)
+        idx = torch.arange(B, device=device)
 
-        for i in range(items.size(0)):
-            target = batch["target_basket"][i]
+        intent_logits = out["intent_logits"][idx, seq_lengths, :]  # (B, V)
+        fill_logits   = out["fill_logits"][idx, seq_lengths, :]    # (B, V)
+        combined      = intent_logits + fill_logits                # (B, V)
+        target_last   = targets[idx, seq_lengths, :]               # (B, V)
 
-            # Section VI Steps 4-6: two-stage residual decode
-            predicted_basket = residual_decode(
-                repr_vec        = h_next[i],
-                item_embeddings = vocab_embeddings,
-                decoder         = model.decoder,
-                k1              = k1,
-                k2              = k2,
-                excluded        = set(),
-            )
+        # Pad targets if needed
+        if target_last.shape[-1] < combined.shape[-1]:
+            target_last = F.pad(target_last, (0, combined.shape[-1] - target_last.shape[-1]))
 
-            recs_10 = predicted_basket[:10]
-            recs_20 = predicted_basket[:20]
+        combined_r10.append(recall_at_k(combined, target_last, 10).mean().item())
+        combined_n10.append(ndcg_at_k(combined, target_last, 10).mean().item())
+        combined_r20.append(recall_at_k(combined, target_last, 20).mean().item())
+        combined_n20.append(ndcg_at_k(combined, target_last, 20).mean().item())
 
-            recalls_10.append(recall_at_k(recs_10, target, 10))
-            ndcgs_10.append(ndcg_at_k(recs_10, target, 10))
-            recalls_20.append(recall_at_k(recs_20, target, 20))
-            ndcgs_20.append(ndcg_at_k(recs_20, target, 20))
+        intent_r10.append(recall_at_k(intent_logits, target_last, 10).mean().item())
+        fill_r10.append(recall_at_k(fill_logits, target_last, 10).mean().item())
 
-    n = max(len(recalls_10), 1)
+        # Orthogonality diagnostic
+        h_intent = out["intent_repr"][idx, seq_lengths, :]
+        h_fill   = out["fill_repr"][idx, seq_lengths, :]
+        cos = F.cosine_similarity(h_intent, h_fill, dim=-1).abs().mean().item()
+        orth_sims.append(cos)
+
+    n = max(len(combined_r10), 1)
+    avg_orth = sum(orth_sims) / n
+
     metrics = {
-        "val/recall@10": sum(recalls_10) / n,
-        "val/ndcg@10":   sum(ndcgs_10)   / n,
-        "val/recall@20": sum(recalls_20) / n,
-        "val/ndcg@20":   sum(ndcgs_20)   / n,
+        "val/recall@10":     sum(combined_r10) / n,
+        "val/ndcg@10":       sum(combined_n10) / n,
+        "val/recall@20":     sum(combined_r20) / n,
+        "val/ndcg@20":       sum(combined_n20) / n,
+        "val/recall@10_intent": sum(intent_r10) / n,
+        "val/recall@10_fill":   sum(fill_r10) / n,
+        "val/orth_cosine":   avg_orth,
     }
 
     logger.info("=== Inference Metrics ===")
-    for k, v in metrics.items():
-        logger.info(f"  {k:<20} {v:.4f}")
+    logger.info(f"  Combined   Recall@10={metrics['val/recall@10']:.4f}  NDCG@10={metrics['val/ndcg@10']:.4f}")
+    logger.info(f"  Combined   Recall@20={metrics['val/recall@20']:.4f}  NDCG@20={metrics['val/ndcg@20']:.4f}")
+    logger.info(f"  Intent-only R@10={metrics['val/recall@10_intent']:.4f}  |  Fill-only R@10={metrics['val/recall@10_fill']:.4f}")
+    logger.info(f"  Orthogonality |cos(h_intent, h_fill)|={avg_orth:.4f}")
 
     return metrics
 
@@ -425,6 +448,28 @@ def main(cfg: DictConfig):
         logger.warning(f"BERT bundle not found at {bert_path}. Random init used.")
 
     # ------------------------------------------------------------------ #
+    # Load dual-stream weights — warm-start GPT + fusion from trained     #
+    # dual-stream checkpoint so Phase 3 doesn't start from scratch        #
+    # ------------------------------------------------------------------ #
+    ds_path = processed_dir / "dual_stream_best.pt"
+    if ds_path.exists():
+        logger.info(f"Warm-starting from dual-stream checkpoint: {ds_path}")
+        ds_sd = torch.load(ds_path, map_location=device)
+        loaded, skipped = [], []
+        for name, param in model.named_parameters():
+            if name in ds_sd and ds_sd[name].shape == param.shape:
+                param.data.copy_(ds_sd[name])
+                loaded.append(name.split('.')[0])
+            else:
+                skipped.append(name.split('.')[0])
+        loaded_modules = sorted(set(loaded))
+        skipped_modules = sorted(set(skipped))
+        logger.info(f"  Loaded modules: {loaded_modules}")
+        logger.info(f"  Skipped (new/resized): {skipped_modules}")
+    else:
+        logger.warning(f"Dual-stream checkpoint not found at {ds_path}. GPT/fusion start from random init.")
+
+    # ------------------------------------------------------------------ #
     # Load Phase 2 — pre-trained importance head + alpha_IDF scores       #
     # ------------------------------------------------------------------ #
     head_path = processed_dir / "importance_head" / "importance_head_best.pt"
@@ -456,6 +501,7 @@ def main(cfg: DictConfig):
         alpha_idf = F.pad(alpha_idf, (0, pad_size), value=0.0)
 
     logger.info(f"Loaded alpha_IDF from {alpha_idf_path}  shape={tuple(alpha_idf.shape)}")
+    _log_partition_stats(alpha_idf, cfg.model.tau_alpha)
 
     # ------------------------------------------------------------------ #
     # Phase 3 — Joint training with full loss L (Eq. 25)                  #

@@ -1,10 +1,10 @@
 seed: 42
-batch_size: 256
+batch_size: 128
 max_seq_len: 30
 num_workers: 8
 
 dataset:
-  name: tafeng
+  name: dunnhumby
 
 wandb:
   project: IMPORTANCE-AWARE-NBR
@@ -13,7 +13,7 @@ trainer:
   max_epochs: 20
   reorth_every: 100
   eval_every: 3
-  mlm_mask_prob: 0.15
+  mlm_mask_prob: 0.0       # Disabled: MLM masking corrupts encoder input during Phase 3
 
 model:
   dim: 128
@@ -35,9 +35,9 @@ loss:
     mlm: 0.3
 
 data:
-  mask_token_id: 1  # Assuming 1 is used for [MASK] in your tokenizer
+  mask_token_id: 1
 
 optim:
-  lr: 0.001
-  weight_decay: 0.004
+  lr: 0.0003
+  weight_decay: 0.001
   clip_norm: 1.0
